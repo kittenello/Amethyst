@@ -3,7 +3,7 @@
 # <img src="https://i.pinimg.com/originals/62/ca/ff/62caff4d60879308531745a6b272920e.png" height=28 /> <a href="https://github.com/kittenello/">kittenello</a><a href="https://github.com/kittenello/Amethyst">/Amethyst</a> <img src="https://i.pinimg.com/originals/62/ca/ff/62caff4d60879308531745a6b272920e.png" height=28 />
 
 **The best multifunctional bot AI to Brawl Stars**  
-Multi-Instance, No more API, Push all, Telegram/Discord notifier, No more GUI/Console
+Multi-Instance, No more API, Push all, Telegram/Discord notifier, No more GUI/Console and other
 
 </div>
 
@@ -44,6 +44,8 @@ Restart Amethyst after changing remote-control settings.
 
 # Developers
 
-Main core & Original PylaAI: AngelFire
+Main core & Original PylaAI: [AngelFire](https://github.com/PylaAI/PylaAI)
+
+Also main core: XXZ
 
 Fork author: kittenello (Mr Pon4ik)
