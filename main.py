@@ -59,7 +59,7 @@ def parse_max_ips(value):
 
 
 OUT_OF_MATCH_REWARD_STATES = {"prestige_reward", "trophy_reward"}
-LOBBY_ONLY_REWARD_STATES = {"star_drop"}
+LOBBY_ONLY_REWARD_STATES = set()
 MATCH_RESULT_STATES = {
     "end_victory",
     "end_defeat",
@@ -219,14 +219,31 @@ def pyla_main(data):
             self.was_paused = False
             self.pause_started_at = None
             self.web_runtime_path = Path("logs") / "web_runtime.json"
+            general_config_runtime = load_toml_as_dict("cfg/general_config.toml")
+            try:
+                self.web_runtime_interval = max(0.25, float(general_config_runtime.get("web_runtime_update_interval", 1.0)))
+            except (TypeError, ValueError):
+                self.web_runtime_interval = 1.0
+            self._last_web_runtime_write = 0.0
+            self._last_web_runtime_payload = None
 
         def initialize_stage_manager(self):
             self.Stage_manager.Trophy_observer.win_streak = data[0]['win_streak']
             self.Stage_manager.Trophy_observer.current_trophies = data[0]['trophies']
             self.Stage_manager.Trophy_observer.current_wins = data[0]['wins'] if data[0]['wins'] != "" else 0
 
-        def write_web_runtime_state(self):
+        def write_web_runtime_state(self, force=False):
+            """Write dashboard state cheaply.
+
+            Older builds wrote logs/web_runtime.json on every vision loop tick.
+            On some PCs that causes constant disk/AV work and makes the emulator
+            stutter even with only one LDPlayer window. Throttle it and skip
+            identical payloads.
+            """
             try:
+                now = time.time()
+                if not force and now - self._last_web_runtime_write < self.web_runtime_interval:
+                    return
                 current = self.Stage_manager.brawlers_pick_data[0] if self.Stage_manager.brawlers_pick_data else {}
                 payload = {
                     "state": self.state or "idle",
@@ -234,8 +251,15 @@ def pyla_main(data):
                     "queued": len(self.Stage_manager.brawlers_pick_data),
                     "ips": round(float(self.ips_ema or 0), 1),
                 }
+                if not force and payload == self._last_web_runtime_payload:
+                    self._last_web_runtime_write = now
+                    return
                 self.web_runtime_path.parent.mkdir(exist_ok=True)
-                self.web_runtime_path.write_text(json.dumps(payload), encoding="utf-8")
+                tmp_path = self.web_runtime_path.with_suffix(".json.tmp")
+                tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+                tmp_path.replace(self.web_runtime_path)
+                self._last_web_runtime_payload = payload
+                self._last_web_runtime_write = now
             except Exception:
                 pass
 
@@ -926,6 +950,10 @@ def run_app():
 
     latest_version = pyla_version if api_base_url == "localhost" else get_latest_version()
     web_app = WebApp(set_data, all_brawlers, pyla_version, latest_version)
+
+    # Keep the dashboard server alive after Stop or after completing a queue.
+    # The old code launched pyla_main once and then run_app returned, so the
+    # dashboard button could not start a fresh bot loop.
     web_app.start()
     while True:
         if selected_data:

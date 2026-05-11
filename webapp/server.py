@@ -369,7 +369,8 @@ class MultiInstanceManager:
                     continue
                 if not (serial.startswith("127.0.0.1:") or serial.startswith("localhost:")):
                     continue
-                if port not in self.default_ports and port not in (5563, 5554, 5556):
+                # Only LDPlayer localhost ADB ports handled by this hub. Hide emulator-* / Android Studio entries.
+                if port not in self.default_ports:
                     continue
                 devices.append({
                     "serial": serial,
@@ -484,6 +485,19 @@ class MultiInstanceManager:
         cfg_path = runtime_dir / "cfg" / "general_config.toml"
         config = dict(load_toml_as_dict(str(cfg_path)))
         config["emulator_port"] = int(port)
+
+        # Multi-instance optimization: uncapped 60 FPS + 1280px scrcpy feed makes
+        # LDPlayer/Brawl Stars lag hard when two or more workers are active. Keep
+        # each isolated runtime lighter by default; users can still raise these in cfg.
+        config.setdefault("cpu_or_gpu", "auto")
+        config["max_ips"] = int(config.get("max_ips") or 30)
+        config["scrcpy_max_fps"] = min(int(config.get("scrcpy_max_fps") or 30), 30)
+        config["scrcpy_max_width"] = min(int(config.get("scrcpy_max_width") or 960), 960)
+        config["scrcpy_bitrate"] = min(int(config.get("scrcpy_bitrate") or 2000000), 2000000)
+        config["onnx_cpu_threads"] = min(int(config.get("onnx_cpu_threads") or 2), 2)
+        config["used_threads"] = min(int(config.get("used_threads") or 2), 2)
+        config["visual_debug"] = "no"
+        config["terminal_logging"] = "no"
         save_dict_as_toml(config, str(cfg_path))
 
     def _queue_for_instance(self, payload, instance_id):
@@ -515,6 +529,17 @@ class MultiInstanceManager:
             self._copy_project_runtime(runtime_dir, cfg_source)
             self._patch_instance_config(runtime_dir, port)
             (runtime_dir / "latest_brawler_data.json").write_text(json.dumps(queue, indent=2), encoding="utf-8")
+
+            # Important: old web stop flags/control files are stored inside the reused runtime.
+            # If they are not cleared, the next launch can immediately stop and look like
+            # the second LDPlayer started but does not move/gas.
+            logs_dir = runtime_dir / "logs"
+            logs_dir.mkdir(exist_ok=True)
+            for stale in [logs_dir / "web_stop_requested.flag"] + list(logs_dir.glob("runtime_control_*.state")):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
 
             log_path = self.logs_dir / f"multi_instance_{instance_id}.log"
             log_file = open(log_path, "a", encoding="utf-8", errors="replace")

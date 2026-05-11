@@ -10,7 +10,7 @@ let playerName = "Player";
 let botRunning = false;
 let multiState = { devices: [], instances: [] };
 let selectedMultiLogId = null;
-let selectedMultiPort = null;
+let selectedMultiPort = Number(localStorage.getItem('amethyst.multi.selectedPort') || 0) || null;
 let multiPollTimer = null;
 let brawlersMultiMode = false;
 let activeInstanceKey = "main";
@@ -192,17 +192,16 @@ function instanceIdForPort(port) {
 }
 
 function selectMultiPort(port) {
+  // Multi-Instance page selection must only choose the target emulator for Start Next.
+  // Do NOT switch Brawlers tabs / queues here, otherwise clicking LDPlayer chips mutates
+  // the bottom queue UI and feels like brawlers disappeared.
   selectedMultiPort = Number(port) || null;
   if (selectedMultiPort) {
-    activeInstanceKey = profileKeyForPort(selectedMultiPort);
-    if (brawlersMultiMode) {
-      loadInstanceProfiles();
-      if (!instanceProfiles[activeInstanceKey]) instanceProfiles[activeInstanceKey] = defaultProfile(activeInstanceKey);
-      applyProfileToUi();
-      renderBrawlers();
-      renderQueue();
-      renderBrawlerInstanceTabs();
-    }
+    try { localStorage.setItem('amethyst.multi.selectedPort', String(selectedMultiPort)); } catch (_) {}
+    loadInstanceProfiles();
+    const key = profileKeyForPort(selectedMultiPort);
+    if (!instanceProfiles[key]) instanceProfiles[key] = defaultProfile(key);
+    saveInstanceProfiles();
   }
   renderMulti();
 }
@@ -851,7 +850,7 @@ setInterval(() => {
   if (document.visibilityState === "visible" && state) {
     refreshRuntime().catch(() => {});
   }
-}, 2500);
+}, 3000);
 
 
 async function refreshMulti() {
@@ -884,11 +883,18 @@ function renderMulti() {
     const devices = multiState.devices || [];
     const onlineDevices = devices.filter(d => String(d.status || '').toLowerCase() === 'device');
     devicesHost.innerHTML = onlineDevices.length ? onlineDevices.map(d => `
-      <button class="device-pill ${Number(d.port) === Number(selectedMultiPort) ? 'active' : ''}" data-port="${d.port || ''}">
+      <button type="button" class="device-pill ${Number(d.port) === Number(selectedMultiPort) ? 'active' : ''}" data-port="${d.port || ''}" title="Use this LDPlayer for Start Next">
         <b>${escapeHtml(d.emulator || 'ADB')}</b>
         <span>${escapeHtml(d.serial || '')}</span>
-        <em>${escapeHtml(d.status || '')}</em>
+        <em>${Number(d.port) === Number(selectedMultiPort) ? 'selected' : escapeHtml(d.status || '')}</em>
       </button>`).join('') : `<div class="empty-devices">No online ADB devices. Start LDPlayer and press Scan ADB.</div>`;
+    devicesHost.querySelectorAll('.device-pill[data-port]').forEach(btn => {
+      btn.onclick = () => {
+        const port = Number(btn.dataset.port || 0);
+        if (!port) return;
+        selectMultiPort(port);
+      };
+    });
   }
   const host = $('multiGrid');
   const instances = (multiState.instances || []).filter(inst => inst && (inst.running || inst.state === 'paused' || inst.state === 'running'));
@@ -957,7 +963,6 @@ function setupMultiHub() {
       multiState.devices = scanned.devices || [];
       const onlinePorts = (multiState.devices || []).filter(d => String(d.status || '').toLowerCase() === 'device').map(d => Number(d.port)).filter(Boolean);
       if (!selectedMultiPort || !onlinePorts.includes(Number(selectedMultiPort))) selectedMultiPort = onlinePorts[0] || null;
-      if (selectedMultiPort) activeInstanceKey = profileKeyForPort(selectedMultiPort);
       renderMulti();
       renderBrawlerInstanceTabs();
     } finally {
@@ -974,7 +979,7 @@ function setupMultiHub() {
       const port = onlinePorts.includes(Number(activePort)) ? Number(activePort) : portForNextInstance();
       if (!port) throw new Error('No online ADB device found. Start LDPlayer and press Scan ADB.');
       selectedMultiPort = port;
-      activeInstanceKey = profileKeyForPort(port);
+      try { localStorage.setItem('amethyst.multi.selectedPort', String(selectedMultiPort)); } catch (_) {}
       const instanceId = instanceIdForPort(port);
       await api('/api/multi/start', { method:'POST', body: JSON.stringify({ id: instanceId, port, queue: queueForPort(port) }) });
       await refreshMulti();
@@ -990,5 +995,5 @@ function setupMultiHub() {
   refreshMulti();
   if (!multiPollTimer) multiPollTimer = setInterval(() => {
     if (document.querySelector('#multi.view.active')) { refreshMulti(); if (selectedMultiLogId) loadMultiLogs(selectedMultiLogId); }
-  }, 2500);
+  }, 3000);
 }

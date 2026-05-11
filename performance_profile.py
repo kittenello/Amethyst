@@ -7,15 +7,40 @@ from utils import load_toml_as_dict, save_dict_as_toml
 
 PERFORMANCE_PROFILES = {
     "balanced": {
-        "description": "Good default for most PCs: uncapped bot loop with a 60 FPS emulator feed.",
+        "description": "Best default for one emulator: smooth enough, but avoids overloading Brawl Stars.",
         "general_config": {
             "cpu_or_gpu": "auto",
-            "max_ips": 0,
-            "scrcpy_max_fps": 60,
-            "scrcpy_max_width": 960,
-            "scrcpy_bitrate": 3000000,
-            "onnx_cpu_threads": 4,
-            "used_threads": 4,
+            "max_ips": 24,
+            "scrcpy_max_fps": 30,
+            "scrcpy_max_width": 854,
+            "scrcpy_bitrate": 1500000,
+            "onnx_cpu_threads": 2,
+            "used_threads": 2,
+            "visual_debug": "no",
+            "terminal_logging": "no",
+            "capture_bad_vision_frames": "no",
+            "web_runtime_update_interval": 1.0,
+        },
+        "bot_config": {
+            "entity_detection_confidence": 0.55,
+            "entity_detection_retry_confidence": 0.35,
+        },
+    },
+
+    "multi_instance": {
+        "description": "Best for running 2-4 LDPlayer windows: lower CPU/GPU and less emulator lag.",
+        "general_config": {
+            "cpu_or_gpu": "auto",
+            "max_ips": 24,
+            "scrcpy_max_fps": 24,
+            "scrcpy_max_width": 854,
+            "scrcpy_bitrate": 1500000,
+            "onnx_cpu_threads": 1,
+            "used_threads": 1,
+            "visual_debug": "no",
+            "terminal_logging": "no",
+            "capture_bad_vision_frames": "no",
+            "web_runtime_update_interval": 1.5,
         },
         "bot_config": {
             "entity_detection_confidence": 0.55,
@@ -32,6 +57,26 @@ PERFORMANCE_PROFILES = {
             "scrcpy_bitrate": 2000000,
             "onnx_cpu_threads": 2,
             "used_threads": 2,
+        },
+        "bot_config": {
+            "entity_detection_confidence": 0.55,
+            "entity_detection_retry_confidence": 0.35,
+        },
+    },
+    "smooth_single": {
+        "description": "For users who report emulator/Brawl Stars lag on one LDPlayer window.",
+        "general_config": {
+            "cpu_or_gpu": "auto",
+            "max_ips": 20,
+            "scrcpy_max_fps": 24,
+            "scrcpy_max_width": 854,
+            "scrcpy_bitrate": 1200000,
+            "onnx_cpu_threads": 2,
+            "used_threads": 2,
+            "visual_debug": "no",
+            "terminal_logging": "no",
+            "capture_bad_vision_frames": "no",
+            "web_runtime_update_interval": 1.5,
         },
         "bot_config": {
             "entity_detection_confidence": 0.55,
