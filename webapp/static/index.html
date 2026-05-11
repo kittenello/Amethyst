@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amethyst Webapp</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">A</div><span>Amethyst</span></div>
+    <nav>
+      <button class="nav active" data-view="dashboard"><span>#</span><b data-i18n="dashboard">Dashboard</b></button>
+      <button class="nav" data-view="multi"><span>∞</span><b>Multi-Instance</b></button>
+      <button class="nav" data-view="brawlers"><span>=</span><b data-i18n="brawlers">Brawlers</b></button>
+      <button class="nav" data-view="playstyles"><span>*</span><b data-i18n="playstyles">Playstyles</b></button>
+      <button class="nav" data-view="history"><span>+</span><b data-i18n="history">History</b></button>
+      <button class="nav" data-view="logging"><span>@</span><b data-i18n="logging">Logging</b></button>
+      <button class="nav" data-view="settings"><span>:</span><b data-i18n="settings">Settings</b></button>
+    </nav>
+  </aside>
+
+  <main class="app">
+    <header class="topbar">
+      <div><h1 id="pageTitle">Dashboard</h1></div>
+      <div class="top-actions">
+        <button id="langToggle" class="pill">English</button>
+      </div>
+    </header>
+
+    <section id="dashboard" class="view active">
+      <div class="grid two">
+        <div class="panel hero-run">
+          <div class="runbox">
+            <div class="eyebrow">RUNTIME</div>
+            <button id="startBtn" class="start" disabled>&gt; <span>START</span></button>
+            <p id="startHint">Select a brawler and a playstyle before starting.</p>
+          </div>
+        </div>
+        <div class="panel" id="activePlaystyle"></div>
+      </div>
+      <div id="runtimePanel" class="session-panel"></div>
+    </section>
+
+    <section id="multi" class="view">
+      <div class="multi-toolbar panel">
+        <div>
+          <div class="eyebrow">MULTI-INSTANCE HUB</div>
+          <h2>Multi-Instance settings</h2>
+        </div>
+        <div class="multi-actions">
+          <button id="multiScan" class="secondary">Scan ADB</button>
+          <button id="multiStartNext" class="primary">Start Next</button>
+          <button id="multiResumeAll" class="secondary">Resume All</button>
+          <button id="multiPauseAll" class="secondary">Pause All</button>
+          <button id="multiStopAll" class="secondary danger-soft">Stop All</button>
+        </div>
+      </div>
+      <div id="multiDevices" class="multi-devices"></div>
+      <div id="multiGrid" class="multi-grid"></div>
+      <div class="panel multi-log-panel">
+        <div class="panel-head"><div><div class="eyebrow">INSTANCE LOGS</div><h2 id="multiLogTitle">Select instance</h2></div><button id="multiCopyLog" class="secondary">Copy Log</button></div>
+        <pre id="multiLogs" class="multi-logs">Logs will appear here...</pre>
+      </div>
+    </section>
+
+    <section id="brawlers" class="view">
+      <div class="grid brawler-layout">
+        <div class="panel">
+          <div class="panel-head"><div><div class="eyebrow">BRAWLER QUEUE</div><h2>Select a brawler and add it to the run order</h2></div><div class="player-card"><b id="playerName">Player</b><small id="playerTag"></small></div></div>
+          <label>SEARCH BRAWLERS</label>
+          <input id="brawlerSearch" class="input wide" placeholder="Search by brawler name">
+          <label>PLAYER TAG</label>
+          <input id="playerTagInput" class="input wide" placeholder="#PLAYER">
+          <div class="player-actions"><button id="loadQueue" class="secondary">Sync Player</button><span class="player-actions-spacer"></span><button id="pushAllBtn" type="button" class="secondary glow-action">Push all</button></div>
+          <label class="check multi-brawler-toggle"><input id="brawlersMultiMode" type="checkbox"><span><b>Multi Instance</b><br>Separate tag, sync and queue for each LDPlayer window.</span></label>
+          <div id="brawlerInstanceTabs" class="brawler-instance-tabs" hidden></div>
+          <p id="playerLoadStatus" class="tiny-status"></p>
+          <div id="brawlerGrid" class="brawler-grid"></div>
+        </div>
+        <aside class="panel sticky" id="brawlerEditor"></aside>
+      </div>
+    </section>
+
+    <section id="playstyles" class="view">
+      <div class="panel selected-zone">
+        <div class="eyebrow">SELECTED</div>
+        <div id="selectedPlaystyle" class="drop-zone">Drag one playstyle here</div>
+      </div>
+      <div class="toolbar playstyle-toolbar">
+        <input id="playstyleSearch" class="input" placeholder="Search by playstyle, brawler, or gamemode">
+        <button id="importPlaystyle" class="secondary">Import</button>
+        <input id="playstyleFile" type="file" accept=".pyla" hidden>
+      </div>
+      <div class="eyebrow muted">LIBRARY</div>
+      <div id="playstyleGrid" class="playstyle-grid"></div>
+    </section>
+
+    <section id="history" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <div><div class="eyebrow">MATCH HISTORY</div><h2 id="historyTotal">0 total matches</h2><p id="historySummary"></p></div>
+          <div class="segmented"><input id="historySearch" class="input" placeholder="Filter by brawler"><button class="active" data-sort="matches">Matches</button><button data-sort="rate">Win Rate</button><button data-sort="name">Name</button></div>
+        </div>
+        <div id="historyGrid" class="history-grid"></div>
+      </div>
+    </section>
+
+    <section id="logging" class="view">
+      <div id="loggingGrid" class="settings-grid"></div>
+    </section>
+
+    <section id="settings" class="view">
+      <div id="settingsGrid" class="settings-grid"></div>
+    </section>
+  </main>
+
+  <footer class="queuebar" id="queuebar">
+    <div id="queueResizeHandle" class="queue-resize-handle" title="Drag to resize queue" aria-label="Drag to resize queue"></div>
+    <div class="queue-content"><div class="eyebrow">QUEUE</div><small id="queueCount">0 brawlers ready</small><div id="queueItems" class="queue-items"></div></div>
+    <button id="clearQueue" class="secondary">Clear Queue</button>
+  </footer>
+
+  <div id="pushAllModal" class="modal-backdrop" hidden>
+    <div class="modal-card">
+      <button id="pushAllClose" class="modal-close" aria-label="Close">×</button>
+      <div class="eyebrow">PUSH ALL</div>
+      <h2>Choose trophy target</h2>
+      <p>All synced brawlers below this target will be added to queue, sorted from lowest trophies.</p>
+      <div class="target-presets">
+        <button data-push-target="250">250</button>
+        <button data-push-target="500">500</button>
+        <button data-push-target="750">750</button>
+        <button data-push-target="1000" class="hot-target">1000</button>
+      </div>
+      <label>CUSTOM TARGET</label>
+      <div class="custom-target-row">
+        <input id="pushAllTarget" class="input wide" value="1000" inputmode="numeric">
+        <button id="pushAllApply" class="primary">Build Queue</button>
+      </div>
+      <p id="pushAllStatus" class="tiny-status"></p>
+    </div>
+  </div>
+
+  <script src="/app.js?v=20260511_multi_instance_clean_cards"></script>
+</body>
+</html>

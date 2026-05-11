@@ -1,0 +1,181 @@
+{"name": "XXZ Improved", "description": "Better kiting, roam, gas priority", "brawlers": ["all"], "gamemodes": ["all"], "author": "xxz", "date": "2026-05-04"}
+
+import math
+import random
+import time
+
+# ─── константы ───────────────────────────────────────────────────
+ROAM_CHANGE_INTERVAL = 2.5   # секунд между сменой направления роама
+SAFE_BUFFER           = 0.85  # множитель safe_range — отступаем чуть раньше
+CHASE_THRESHOLD       = 1.4   # множитель attack_range — идём к врагу если дальше
+
+# ─── утилиты ─────────────────────────────────────────────────────
+def _try_move(player_pos, moves, walls):
+    """Возвращает первый незаблокированный вариант из списка."""
+    for m in moves:
+        if m and not is_path_blocked(player_pos, m, walls):
+            return m
+    return None
+
+def _random_move(player_pos, walls):
+    opts = ["W", "A", "S", "D"]
+    random.shuffle(opts)
+    return _try_move(player_pos, opts, walls) or "W"
+
+# ─── роам без тиммейта ────────────────────────────────────────────
+def roam_movement(player_pos, walls, persistent_data):
+    """Медленный роам — меняет направление каждые N секунд."""
+    now = time.time()
+    last = persistent_data.get("roam_last_change", 0)
+    direction = persistent_data.get("roam_direction", "W")
+
+    if now - last >= ROAM_CHANGE_INTERVAL or is_path_blocked(player_pos, direction, walls):
+        direction = _random_move(player_pos, walls)
+        persistent_data["roam_direction"] = direction
+        persistent_data["roam_last_change"] = now
+
+    return direction
+
+# ─── движение без врагов ──────────────────────────────────────────
+def safe_movement(player_pos, walls, teammate_data, persistent_data):
+    closest, dist = find_closest_teammate(teammate_data, player_pos, walls)
+
+    if not closest:
+        # нет тиммейта — роам
+        return roam_movement(player_pos, walls, persistent_data)
+
+    # есть тиммейт, но не стакаемся вплотную (dist > 2 тайла — идём к нему)
+    if dist > 2:
+        dx = closest[0] - player_pos[0]
+        dy = closest[1] - player_pos[1]
+        h = get_horizontal_move_key(dx)
+        v = get_vertical_move_key(dy)
+        move = _try_move(player_pos, [h + v, h, v], walls)
+        return move or _random_move(player_pos, walls)
+    else:
+        # уже рядом — роам вокруг тиммейта
+        return roam_movement(player_pos, walls, persistent_data)
+
+# ─── газ — убегаем по вектору от центра газа ─────────────────────
+def gas_escape(player_data, player_pos, walls):
+    opposite = {"up": "S", "down": "W", "left": "D", "right": "A"}
+    v, h = "", ""
+    for d in ["up", "down"]:
+        if is_there_poison_gas(d, player_data):
+            v = opposite[d]; break
+    for d in ["left", "right"]:
+        if is_there_poison_gas(d, player_data):
+            h = opposite[d]; break
+    move = v + h
+    if move and not is_path_blocked(player_pos, move, walls):
+        return move
+    # если прямой путь заблокирован — пробуем компоненты
+    if v and not is_path_blocked(player_pos, v, walls):
+        return v
+    if h and not is_path_blocked(player_pos, h, walls):
+        return h
+    return move  # всё равно возвращаем — пусть боится стены меньше газа
+
+# ══════════════════════════════════════════════════════════════════
+#  ОСНОВНОЙ КОД ПЛЕЙСТАЙЛА
+# ══════════════════════════════════════════════════════════════════
+
+brawler_info = brawlers_info.get(brawler)
+if not brawler_info:
+    raise ValueError(f"Brawler '{brawler}' not found in brawlers info.")
+
+# hold-attack release
+must_hold = must_brawler_hold_attack(brawler, brawlers_info)
+if must_hold and persistent_data["time_since_holding_attack"] is not None:
+    held = time.time() - persistent_data["time_since_holding_attack"]
+    if held >= brawler_info['hold_attack'] + seconds_to_hold_attack_after_reaching_max:
+        attack(touch_up=True, touch_down=False)
+        persistent_data["time_since_holding_attack"] = None
+
+safe_range, attack_range, super_range = get_brawler_range(brawler)
+player_pos = get_player_pos(player_data)
+
+# ── 1. ГАЗ — высший приоритет ─────────────────────────────────────
+gas_move = gas_escape(player_data, player_pos, walls)
+in_gas = bool(gas_move)
+
+if in_gas:
+    movement = gas_move
+    # атакуем только если враг уже в радиусе — не останавливаемся ради атаки
+    if is_there_enemy(enemy_data):
+        enemy_coords, enemy_distance = find_closest_enemy(enemy_data, player_pos, walls, "attack")
+        if enemy_coords and enemy_distance <= attack_range:
+            if is_enemy_hittable(player_pos, enemy_coords, walls, "attack"):
+                if not must_hold:
+                    attack()
+
+# ── 2. НЕТ ВРАГОВ ─────────────────────────────────────────────────
+elif not is_there_enemy(enemy_data):
+    movement = safe_movement(player_pos, walls, teammate_data, persistent_data)
+
+# ── 3. ЕСТЬ ВРАГ ──────────────────────────────────────────────────
+else:
+    enemy_coords, enemy_distance = find_closest_enemy(enemy_data, player_pos, walls, "attack")
+
+    if enemy_coords is None:
+        movement = safe_movement(player_pos, walls, teammate_data, persistent_data)
+    else:
+        dx = enemy_coords[0] - player_pos[0]
+        dy = enemy_coords[1] - player_pos[1]
+
+        real_safe = safe_range * SAFE_BUFFER
+
+        if enemy_distance > real_safe:
+            # ── идём к врагу (но только если в радиусе атаки×1.4)
+            if enemy_distance <= attack_range * CHASE_THRESHOLD:
+                # враг близко — стоим и ждём/атакуем
+                h = get_horizontal_move_key(dx)
+                v = get_vertical_move_key(dy)
+            else:
+                # враг далеко — сближаемся
+                h = get_horizontal_move_key(dx)
+                v = get_vertical_move_key(dy)
+        else:
+            # ── враг слишком близко — ОТХОДИМ
+            h = get_horizontal_move_key(dx, opposite=True)
+            v = get_vertical_move_key(dy, opposite=True)
+
+        if game_mode == 3:
+            prio = [v + h, v, h]
+        elif game_mode == 5:
+            prio = [h + v, h, v]
+        else:
+            prio = [h + v, h, v]
+
+        # фильтруем пустые строки
+        prio = [m for m in prio if m]
+
+        move = _try_move(player_pos, prio, walls)
+        if move is None:
+            move = _random_move(player_pos, walls)
+        movement = move
+
+        # ── СУПЕР
+        if is_super_ready and persistent_data["time_since_holding_attack"] is None:
+            super_type = brawler_info['super_type']
+            hittable_s = is_enemy_hittable(player_pos, enemy_coords, walls, "super")
+            if should_use_super_on_enemy(brawler, super_type, enemy_distance, attack_range, super_range, hittable_s):
+                if is_hypercharge_ready:
+                    use_hypercharge()
+                use_super()
+
+        # ── АТАКА
+        if enemy_distance <= attack_range:
+            if is_enemy_hittable(player_pos, enemy_coords, walls, "attack"):
+                if is_gadget_ready and persistent_data["time_since_holding_attack"] is None:
+                    use_gadget()
+
+                if not must_hold:
+                    attack()
+                else:
+                    if persistent_data["time_since_holding_attack"] is None:
+                        persistent_data["time_since_holding_attack"] = time.time()
+                        attack(touch_up=False, touch_down=True)
+                    elif time.time() - persistent_data["time_since_holding_attack"] >= brawler_info['hold_attack']:
+                        attack(touch_up=True, touch_down=False)
+                        persistent_data["time_since_holding_attack"] = None
