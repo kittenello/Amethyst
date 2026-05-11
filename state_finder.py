@@ -14,7 +14,7 @@ images_with_star_drop = []
 for file in os.listdir(star_drops_path):
     if "star_drop" in file:
         images_with_star_drop.append(file)
-images_with_star_drop.sort(key=lambda name: 0 if name in ("angelic_star_drop.png", "demonic_star_drop.png") else 1)
+images_with_star_drop.sort(key=lambda name: 0 if name in ("angelic_star_drop.png", "demonic_star_drop.png", "starr_nova_star_drop.png", "starr_nova.png") or "starr_nova" in name or "starrnova" in name else 1)
 STAR_DROP_TEMPLATE_THRESHOLD = 0.97
 
 end_results_path = r"./images/end_results/"
@@ -651,8 +651,11 @@ def get_star_drop_type(image):
                 return "angelic"
             if image_filename == "demonic_star_drop.png":
                 return "demonic"
-            if not has_standard_star_drop_screen_context(image):
-                return None
+            if image_filename in ("starr_nova_star_drop.png", "starr_nova.png") or "starr_nova" in image_filename or "starrnova" in image_filename:
+                return "starr_nova"
+            # If a template from images/star_drop_types/*star_drop*.png is found,
+            # treat it as a real star_drop state. The old green/title context check
+            # missed the yellow smiley star drop screen on some resolutions/themes.
             return "standard"
     return None
 

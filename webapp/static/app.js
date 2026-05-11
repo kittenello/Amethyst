@@ -10,6 +10,7 @@ let playerName = "Player";
 let botRunning = false;
 let multiState = { devices: [], instances: [] };
 let selectedMultiLogId = null;
+let selectedMultiPort = null;
 let multiPollTimer = null;
 let brawlersMultiMode = false;
 let activeInstanceKey = "main";
@@ -175,6 +176,35 @@ function queueForPort(port) {
   if (!brawlersMultiMode) return state?.queue || [];
   const profile = instanceProfiles[profileKeyForPort(port)] || currentProfile();
   return Array.isArray(profile.queue) ? profile.queue : [];
+}
+
+function instanceIdForPort(port) {
+  const p = Number(port);
+  const common = [5555, 5557, 5559, 5561];
+  const idx = common.indexOf(p);
+  if (idx >= 0) return idx + 1;
+  const online = (multiState.devices || [])
+    .filter(d => String(d.status || '').toLowerCase() === 'device' && Number(d.port))
+    .map(d => Number(d.port))
+    .sort((a, b) => a - b);
+  const pos = online.indexOf(p);
+  return pos >= 0 ? pos + 1 : 1;
+}
+
+function selectMultiPort(port) {
+  selectedMultiPort = Number(port) || null;
+  if (selectedMultiPort) {
+    activeInstanceKey = profileKeyForPort(selectedMultiPort);
+    if (brawlersMultiMode) {
+      loadInstanceProfiles();
+      if (!instanceProfiles[activeInstanceKey]) instanceProfiles[activeInstanceKey] = defaultProfile(activeInstanceKey);
+      applyProfileToUi();
+      renderBrawlers();
+      renderQueue();
+      renderBrawlerInstanceTabs();
+    }
+  }
+  renderMulti();
 }
 
 function renderAll() {
@@ -646,7 +676,7 @@ async function loadPlayerData(silent = false) {
     }
 
     const count = Object.keys(playerTrophies).length;
-    if ($("playerLoadStatus")) $("playerLoadStatus").textContent = `synced ${Math.floor(count / 2) || count} brawlers player: ${playerName}`;
+    if ($("playerLoadStatus")) $("playerLoadStatus").textContent = `Synced ${Math.floor(count / 2) || count} brawlers. Player: ${playerName}`;
     renderBrawlers();
     renderBrawlerEditor();
     renderQueue();
@@ -844,6 +874,7 @@ function portForNextInstance() {
   const ports = (multiState.devices || [])
     .filter(d => String(d.status || '').toLowerCase() === 'device')
     .map(d => Number(d.port)).filter(Boolean);
+  if (selectedMultiPort && ports.includes(Number(selectedMultiPort))) return Number(selectedMultiPort);
   return ports.find(p => !used.has(p)) || ports[0] || null;
 }
 
@@ -853,7 +884,7 @@ function renderMulti() {
     const devices = multiState.devices || [];
     const onlineDevices = devices.filter(d => String(d.status || '').toLowerCase() === 'device');
     devicesHost.innerHTML = onlineDevices.length ? onlineDevices.map(d => `
-      <button class="device-pill ${profileKeyForPort(d.port) === activeInstanceKey ? 'active' : ''}" data-port="${d.port || ''}">
+      <button class="device-pill ${Number(d.port) === Number(selectedMultiPort) ? 'active' : ''}" data-port="${d.port || ''}">
         <b>${escapeHtml(d.emulator || 'ADB')}</b>
         <span>${escapeHtml(d.serial || '')}</span>
         <em>${escapeHtml(d.status || '')}</em>
@@ -924,6 +955,9 @@ function setupMultiHub() {
     try {
       const scanned = await api('/api/multi/scan');
       multiState.devices = scanned.devices || [];
+      const onlinePorts = (multiState.devices || []).filter(d => String(d.status || '').toLowerCase() === 'device').map(d => Number(d.port)).filter(Boolean);
+      if (!selectedMultiPort || !onlinePorts.includes(Number(selectedMultiPort))) selectedMultiPort = onlinePorts[0] || null;
+      if (selectedMultiPort) activeInstanceKey = profileKeyForPort(selectedMultiPort);
       renderMulti();
       renderBrawlerInstanceTabs();
     } finally {
@@ -935,14 +969,16 @@ function setupMultiHub() {
     if (btn) btn.textContent = 'Starting...';
     try {
       persistActiveProfile();
-      const nextId = Math.max(0, ...((multiState.instances || []).map(i => Number(i.id) || 0))) + 1;
       const onlinePorts = (multiState.devices || []).filter(d => String(d.status || '').toLowerCase() === 'device').map(d => Number(d.port)).filter(Boolean);
-      const activePort = activeInstanceKey.startsWith('ldp_') ? Number(activeInstanceKey.replace('ldp_', '')) : portForNextInstance();
-      const port = onlinePorts.includes(activePort) ? activePort : portForNextInstance();
+      const activePort = selectedMultiPort || (activeInstanceKey.startsWith('ldp_') ? Number(activeInstanceKey.replace('ldp_', '')) : null);
+      const port = onlinePorts.includes(Number(activePort)) ? Number(activePort) : portForNextInstance();
       if (!port) throw new Error('No online ADB device found. Start LDPlayer and press Scan ADB.');
-      await api('/api/multi/start', { method:'POST', body: JSON.stringify({ id: nextId, port, queue: queueForPort(port) }) });
+      selectedMultiPort = port;
+      activeInstanceKey = profileKeyForPort(port);
+      const instanceId = instanceIdForPort(port);
+      await api('/api/multi/start', { method:'POST', body: JSON.stringify({ id: instanceId, port, queue: queueForPort(port) }) });
       await refreshMulti();
-      await loadMultiLogs(nextId).catch(()=>{});
+      await loadMultiLogs(instanceId).catch(()=>{});
     } finally {
       if (btn) btn.textContent = 'Start Next';
     }

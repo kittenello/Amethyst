@@ -363,9 +363,13 @@ class MultiInstanceManager:
                 m = re.search(r":(\d+)$", serial)
                 if m:
                     port = int(m.group(1))
-                # Keep the hub clean: only real online ADB devices are returned.
-                # Offline/candidate ports caused fake LDPlayer cards in the UI.
+                # Keep the hub clean: show only localhost-port emulators used by LDPlayer/MuMu/BlueStacks.
+                # Android Studio stale entries like emulator-5554/emulator-5556 are hidden.
                 if str(status).strip().lower() != "device":
+                    continue
+                if not (serial.startswith("127.0.0.1:") or serial.startswith("localhost:")):
+                    continue
+                if port not in self.default_ports and port not in (5563, 5554, 5556):
                     continue
                 devices.append({
                     "serial": serial,
@@ -517,6 +521,9 @@ class MultiInstanceManager:
             env = os.environ.copy()
             env["PYLA_MULTI_INSTANCE_ID"] = str(instance_id)
             env["PYLA_MULTI_INSTANCE_PORT"] = str(port)
+            env["PYLA_MULTI_INSTANCE_SERIAL"] = f"127.0.0.1:{port}"
+            env["PYLA_MULTI_INSTANCE_NAME"] = self._emulator_name(port)
+            env["PYLA_MULTI_INSTANCE_CFG"] = cfg_source.name
             cmd = [sys.executable, "multi_worker.py"]
             process = subprocess.Popen(
                 cmd, cwd=str(runtime_dir), stdout=log_file, stderr=subprocess.STDOUT,

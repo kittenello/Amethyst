@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 
 import cv2
@@ -106,7 +107,20 @@ class StageManager:
             "trophies": self.Trophy_observer.current_trophies,
             "wins": self.Trophy_observer.current_wins,
         }
+        instance_id = os.environ.get("PYLA_MULTI_INSTANCE_ID")
+        instance_port = os.environ.get("PYLA_MULTI_INSTANCE_PORT")
+        instance_serial = os.environ.get("PYLA_MULTI_INSTANCE_SERIAL") or (f"127.0.0.1:{instance_port}" if instance_port else "")
+        instance_cfg = os.environ.get("PYLA_MULTI_INSTANCE_CFG")
+        instance_label = f"Instance #{instance_id}" if instance_id else ""
+        if instance_serial:
+            instance_label = f"{instance_label} | {instance_serial}" if instance_label else instance_serial
+
         details = {
+            "instance": instance_label,
+            "instance_id": instance_id or "",
+            "instance_pid": os.getpid() if instance_id else "",
+            "instance_adb": instance_serial,
+            "instance_cfg": instance_cfg or "",
             "brawler": current.get("brawler", ""),
             "started_trophies": self.started_trophies_by_brawler.get(
                 str(current.get("brawler", "")).lower(),
@@ -559,21 +573,18 @@ class StageManager:
         if drop_type is None:
             return
 
-        print(f"{drop_type.title()} star drop detected; opening by template.")
+        print(f"{drop_type.title()} star drop detected; opening with Q.")
         self.window_controller.keys_up(list("wasd"))
-        current_height, current_width = screenshot.shape[:2]
-        width_ratio = current_width / 1920
-        height_ratio = current_height / 1080
-        x = int(965 * width_ratio)
-        y = int(525 * height_ratio)
-        if drop_type in ("angelic", "demonic"):
-            for _ in range(3):
-                self.window_controller.click(x, y, delay=0.45)
-                time.sleep(0.2)
-        else:
-            for _ in range(5):
-                self.window_controller.click(x, y, delay=0.04)
-                time.sleep(0.08)
+
+        # Starr drops are opened by the attack/action button. Using Q is more
+        # reliable across LDPlayer instances than tapping fixed screen coords.
+        long_press_types = ("angelic", "demonic", "starr_nova")
+        attempts = 4 if drop_type in long_press_types else 6
+        hold_time = 0.35 if drop_type in long_press_types else 0.06
+        delay = 0.35 if drop_type in long_press_types else 0.10
+        for _ in range(attempts):
+            self.window_controller.press_key("Q", delay=hold_time)
+            time.sleep(delay)
 
     def handle_prestige_reward(self):
         screenshot = self.window_controller.screenshot()
