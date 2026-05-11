@@ -44,7 +44,7 @@ Restart Amethyst after changing remote-control settings.
 
 # Developers
 
-Main core & Original PylaAI: AngelFire
+Main core & Original PylaAI: [AngelFire](https://github.com/PylaAI/PylaAI)
 
 Also main core: XXZ
 
