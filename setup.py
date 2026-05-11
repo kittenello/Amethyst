@@ -11,30 +11,26 @@ RESET = "\033[0m"
 
 SPINNER = ["/", "-", "\\", "|"]
 
-art = """
+art = r"""
            __  __ ______ _______ _    ___     _______ _______  
      /\   |  \/  |  ____|__   __| |  | \ \   / / ____|__   __| 
     /  \  | \  / | |__     | |  | |__| |\ \_/ / (___    | |    
    / /\ \ | |\/| |  __|    | |  |  __  | \   / \___ \   | |    
   / ____ \| |  | | |____   | |  | |  | |  | |  ____) |  | |    
  /_/    \_\_|  |_|______|  |_|  |_|  |_|  |_| |_____/   |_|    
-                                                               
-                                                               
 """
 
-amethyst = """
-  .     '     ,
-    _________
- _ /_|_____|_\ _
-   '. \   / .'
-     '.\ /.'
-       '.'
-"""
 
 if platform.system() != "Windows" or "microsoft" in platform.uname()[3].lower():
     print("ERROR: This version of Amethyst is for WINDOWS ONLY.")
     print("Mac or Linux detected. Please use the Universal branch.")
     sys.exit(1)
+
+
+def get_python_cmd():
+    if getattr(sys, "frozen", False):
+        return ["py", "-3.11-64"]
+    return [sys.executable]
 
 
 def bootstrap():
@@ -47,7 +43,7 @@ def bootstrap():
         print("\nDetected missing core tools. Stabilizing environment...")
         os.environ["PYLAAI_BOOTSTRAP"] = "1"
         subprocess.check_call([
-            sys.executable,
+            *get_python_cmd(),
             "-m",
             "pip",
             "install",
@@ -56,7 +52,7 @@ def bootstrap():
             "setuptools",
             "wheel"
         ])
-        subprocess.run([sys.executable] + sys.argv)
+        subprocess.run([*get_python_cmd()] + sys.argv)
         sys.exit(0)
 
 
@@ -73,19 +69,6 @@ def clear():
 def enable_ansi():
     os.system("")
 
-def center_text(text):
-    try:
-        width = os.get_terminal_size().columns
-    except:
-        width = 120
-
-    lines = text.splitlines()
-    centered = []
-
-    for line in lines:
-        centered.append(line.center(width))
-
-    return "\n".join(centered)
 
 def draw_ui(
     percent=0,
@@ -101,7 +84,7 @@ def draw_ui(
 
     try:
         width = os.get_terminal_size().columns
-    except:
+    except Exception:
         width = 120
 
     box_width = 64
@@ -111,17 +94,12 @@ def draw_ui(
     filled = int(bar_len * percent / 100)
     bar = "#" * filled + "." * (bar_len - filled)
 
-    def c(line=""):
-        print(line.center(width))
-
     def cp(line="", color=RESET):
         print(color + line.center(width) + RESET)
 
     def row(text=""):
         text = text[:inner - 2]
         return "| " + text.ljust(inner - 2) + " |"
-
-    cp("", PURPLE)
 
     for line in art.splitlines():
         cp(line, PURPLE)
@@ -150,8 +128,6 @@ def draw_ui(
 
 
 def run_command_silent(cmd, task_name, step, total, gpu, setup_name):
-    stderr_lines = []
-
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
@@ -162,6 +138,7 @@ def run_command_silent(cmd, task_name, step, total, gpu, setup_name):
     )
 
     i = 0
+
     while process.poll() is None:
         percent = min(99, int(step / total * 100))
         draw_ui(
@@ -177,14 +154,16 @@ def run_command_silent(cmd, task_name, step, total, gpu, setup_name):
         i += 1
         time.sleep(0.15)
 
+    stderr = ""
+
     if process.stderr:
-        stderr_lines = process.stderr.read().splitlines()
+        stderr = process.stderr.read()
 
     if process.returncode != 0:
         clear()
         print("[ERROR] Failed installing:", task_name)
         print()
-        print("\n".join(stderr_lines[-40:]))
+        print(stderr[-4000:])
         raise RuntimeError(f"pip install failed: {task_name}")
 
 
@@ -192,7 +171,7 @@ def force_install(reqs, no_deps=False, task_name=None, step=1, total=1, gpu="Det
     task_name = task_name or " ".join(reqs)
 
     cmd = [
-        sys.executable,
+        *get_python_cmd(),
         "-m",
         "pip",
         "install",
@@ -209,9 +188,9 @@ def force_install(reqs, no_deps=False, task_name=None, step=1, total=1, gpu="Det
     run_command_silent(cmd, task_name, step, total, gpu, setup_name)
 
 
-def remove_onnxruntime_variants(step, total, gpu, setup_name):
+def remove_onnxruntime_variants():
     cmd = [
-        sys.executable,
+        *get_python_cmd(),
         "-m",
         "pip",
         "uninstall",
@@ -231,7 +210,8 @@ def remove_onnxruntime_variants(step, total, gpu, setup_name):
 
 
 def install_onnxruntime_variant(req, step, total, gpu, setup_name):
-    remove_onnxruntime_variants(step, total, gpu, setup_name)
+    remove_onnxruntime_variants()
+
     force_install(
         [req],
         task_name=req,
@@ -287,6 +267,21 @@ def ask_user(prompt_text):
     print()
     response = input(prompt_text + " (Y/N): ").strip().lower()
     return response in ["y", "yes", "д", "да"]
+
+
+def create_run_bat():
+    run_bat = """@echo off
+cd /d %~dp0
+set OMP_NUM_THREADS=2
+set OPENBLAS_NUM_THREADS=2
+set MKL_NUM_THREADS=2
+set NUMEXPR_NUM_THREADS=2
+py -3.11-64 main.py
+pause
+"""
+
+    with open("run.bat", "w", encoding="utf-8") as f:
+        f.write(run_bat)
 
 
 def setup_pyla():
@@ -350,13 +345,7 @@ def setup_pyla():
         setup_name = "NVIDIA DirectML"
 
         if os.environ.get("PYLAAI_SETUP_AUTO", "").strip().lower() in ("1", "true", "yes"):
-            install_onnxruntime_variant(
-                "onnxruntime-directml",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
 
         elif ask_user("Install NVIDIA CUDA acceleration?"):
             if ver >= 10.0:
@@ -394,108 +383,50 @@ def setup_pyla():
                 setup_name=setup_name
             )
 
-            install_onnxruntime_variant(
-                "onnxruntime-gpu",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime-gpu", step, total_steps, name, setup_name)
 
         elif ask_user("Install DirectML GPU acceleration instead?"):
             setup_name = "DirectML Recommended"
-            install_onnxruntime_variant(
-                "onnxruntime-directml",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
 
         else:
             setup_name = "CPU ONNX Runtime"
-            install_onnxruntime_variant(
-                "onnxruntime",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime", step, total_steps, name, setup_name)
 
     elif target == "intel":
         setup_name = "Intel GPU"
 
         if ask_user("Install DirectML GPU acceleration?"):
             setup_name = "Intel DirectML"
-            install_onnxruntime_variant(
-                "onnxruntime-directml",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
 
         elif ask_user("Install Intel OpenVINO acceleration instead?"):
             setup_name = "Intel OpenVINO"
-            install_onnxruntime_variant(
-                "onnxruntime-openvino",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime-openvino", step, total_steps, name, setup_name)
 
         else:
             setup_name = "CPU ONNX Runtime"
-            install_onnxruntime_variant(
-                "onnxruntime",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime", step, total_steps, name, setup_name)
 
     elif "amd" in target:
         setup_name = "AMD GPU"
 
         if ask_user("Install AMD DirectML acceleration?"):
             setup_name = "AMD DirectML"
-            install_onnxruntime_variant(
-                "onnxruntime-directml",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
+
         else:
             setup_name = "CPU ONNX Runtime"
-            install_onnxruntime_variant(
-                "onnxruntime",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime", step, total_steps, name, setup_name)
 
     else:
         if ask_user("Install DirectML GPU acceleration?"):
             setup_name = "DirectML"
-            install_onnxruntime_variant(
-                "onnxruntime-directml",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
+
         else:
             setup_name = "CPU ONNX Runtime"
-            install_onnxruntime_variant(
-                "onnxruntime",
-                step,
-                total_steps,
-                name,
-                setup_name
-            )
+            install_onnxruntime_variant("onnxruntime", step, total_steps, name, setup_name)
 
     step += 1
 
@@ -529,7 +460,8 @@ def setup_pyla():
         gpu=name,
         setup_name=setup_name
     )
-    step += 1
+
+    create_run_bat()
 
     draw_ui(
         percent=100,
@@ -542,28 +474,17 @@ def setup_pyla():
         spin="✓"
     )
 
-    run_bat = r"""@echo off
-    cd /d %~dp0
-    set OMP_NUM_THREADS=2
-    set OPENBLAS_NUM_THREADS=2
-    set MKL_NUM_THREADS=2
-    set NUMEXPR_NUM_THREADS=2
-    py -3.11-64 main.py
-    pause
-    """
-
-    with open("run.bat", "w", encoding="utf-8") as f:
-        f.write(run_bat)
-
     print()
     print(PURPLE + "=" * 50 + RESET)
     print(WHITE + "            SETUP COMPLETED!" + RESET)
     print(PURPLE + "=" * 50 + RESET)
     print(f"  GPU Detected: {name}")
     print(f"  Setup:        {setup_name}")
+    print(f"  Python CMD:   {' '.join(get_python_cmd())}")
     print(PURPLE + "=" * 50 + RESET)
     print()
-    print(f"  Start run.bat for start a bot")
+    print("  Start run.bat to start the bot.")
+    print()
 
 
 if len(sys.argv) == 1:
