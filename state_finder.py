@@ -57,18 +57,27 @@ def load_template(image_path, width, height):
 crop_region = load_toml_as_dict("./cfg/lobby_config.toml")['lobby']['trophy_observer']
 _current_gamemode = load_toml_as_dict("./cfg/bot_config.toml").get("gamemode", "")
 
-# Showdown has place-based results (1st-4th in trio) instead of victory/defeat.
-# Each place may have multiple template variants (different backgrounds at
-# different trophy ranges). Any matching variant counts as that place.
 showdown_place_templates = {
-    "1st": ["sd1st.png"],
-    "2nd": ["sd2nd.png"],
-    "4th": ["sd4th.png"],
-    "3rd": ["sd3rd.png", "sd3rd_alt.png"],
+    "1st": {
+        "templates": ["sd1st.png", "sd1st_ru.png", "sd1stt.png"],
+        "thresholds": [0.8, 0.7, 0.8]
+    },
+    "2nd": {
+        "templates": ["sd2nd.png"],
+        "thresholds": [0.8]
+    },
+    "4th": {
+        "templates": ["sd4th.png"],
+        "thresholds": [0.8]
+    },
+    "3rd": {
+        "templates": ["sd3rd.png", "sd3rd_alt.png"],
+        "thresholds": [0.8, 0.8]
+    },
 }
 
 
-SHOWDOWN_PLACE_THRESHOLD = 0.95
+SHOWDOWN_PLACE_THRESHOLD = 0.8
 
 
 def refresh_runtime_config():
@@ -86,13 +95,15 @@ def refresh_runtime_config():
 
 def find_game_result(screenshot):
     if _current_gamemode == "showdown":
-        for place, template_files in showdown_place_templates.items():
-            for template_file in template_files:
+        for place, template_data in showdown_place_templates.items():
+            templates = template_data["templates"]
+            thresholds = template_data["thresholds"]
+            for template_file, threshold in zip(templates, thresholds):
                 if is_template_in_region(
                     screenshot,
                     end_results_path + template_file,
                     crop_region,
-                    threshold=SHOWDOWN_PLACE_THRESHOLD,
+                    threshold=threshold,
                 ):
                     return place
         return False
@@ -100,14 +111,30 @@ def find_game_result(screenshot):
     is_victory = is_template_in_region(screenshot, end_results_path + 'victory.png', crop_region)
     if is_victory:
         return "victory"
+    
+    if os.path.exists(end_results_path + 'victory_ru.png'):
+        is_victory_ru = is_template_in_region(screenshot, end_results_path + 'victory_ru.png', crop_region)
+        if is_victory_ru:
+            return "victory"
 
     is_defeat = is_template_in_region(screenshot, end_results_path + 'defeat.png', crop_region)
     if is_defeat:
         return "defeat"
+    
+    if os.path.exists(end_results_path + 'defeat_ru.png'):
+        is_defeat_ru = is_template_in_region(screenshot, end_results_path + 'defeat_ru.png', crop_region)
+        if is_defeat_ru:
+            return "defeat"
 
     is_draw = is_template_in_region(screenshot, end_results_path + 'draw.png', crop_region)
     if is_draw:
         return "draw"
+    
+    if os.path.exists(end_results_path + 'draw_ru.png'):
+        is_draw_ru = is_template_in_region(screenshot, end_results_path + 'draw_ru.png', crop_region)
+        if is_draw_ru:
+            return "draw"
+            
     return False
 
 
@@ -153,22 +180,38 @@ def is_in_offer_popup(image) -> bool:
 def get_matchmaking_exit_button_center(image):
     region = region_data.get("exit_match_making", [1600, 925, 295, 135])
     template_path = states_path + "exit_match_making.png"
+    template_path_ru = states_path + "exit_match_ru.png"
+    
+    template_exists = os.path.exists(template_path) or os.path.exists(template_path_ru)
+    if not template_exists:
+        return None
+        
     if os.path.exists(template_path) and not is_template_in_region(
             image,
             template_path,
             region,
             threshold=0.82,
     ):
-        return None
+        if os.path.exists(template_path_ru) and not is_template_in_region(
+                image,
+                template_path_ru,
+                region,
+                threshold=0.82,
+        ):
+            return None
+    elif not os.path.exists(template_path):
+        if not is_template_in_region(
+                image,
+                template_path_ru,
+                region,
+                threshold=0.82,
+        ):
+            return None
 
     current_height, current_width = image.shape[:2]
     width_ratio = current_width / orig_screen_width
     height_ratio = current_height / orig_screen_height
 
-    # Matchmaking has a large red Exit button fixed in the lower-right corner.
-    # Require the exact Exit template first, then use the color/shape pass only
-    # to return a scaled click center. In-match red UI can otherwise resemble a
-    # cancel button closely enough to cause false match_making states.
     x = int(region[0] * width_ratio)
     y = int(region[1] * height_ratio)
     w = int(region[2] * width_ratio)
@@ -334,9 +377,6 @@ def get_starr_nova_got_it_button_center(image):
     width_ratio = current_width / orig_screen_width
     height_ratio = current_height / orig_screen_height
 
-    # Fixed event-info layout: large green "GOT IT!" button centered near the
-    # bottom. Region is intentionally tight so lobby/match green UI cannot
-    # trigger it.
     button_crop = crop_scaled_region(image, [690, 835, 560, 190])
     if button_crop.size == 0:
         return None
@@ -390,9 +430,6 @@ def is_starr_nova_info_screen(image):
         ):
             return True
 
-    # The screen is mostly grayscale manga panels, with cyan headings and the
-    # bright event logo. These anchors make the green button check specific to
-    # this event screen instead of any random confirmation button.
     full_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     low_sat_ratio = cv2.countNonZero(
         cv2.inRange(full_hsv[:, :, 1], np.array(0, dtype=np.uint8), np.array(55, dtype=np.uint8))
@@ -492,7 +529,16 @@ def is_in_end_of_a_match(image):
 
 
 def is_in_trophy_reward(image):
-    return is_template_in_region(image, states_path + 'trophies_screen.png', region_data["trophies_screen"])
+    trophies_template = states_path + 'trophies_screen.png'
+    trophies_template_ru = states_path + 'trophies_screen_ru.png'
+    
+    if os.path.exists(trophies_template) and is_template_in_region(image, trophies_template, region_data["trophies_screen"]):
+        return True
+    
+    if os.path.exists(trophies_template_ru) and is_template_in_region(image, trophies_template_ru, region_data["trophies_screen"]):
+        return True
+        
+    return False
 
 
 def count_hsv_in_region(image, region, lower, upper):
@@ -653,9 +699,6 @@ def get_star_drop_type(image):
                 return "demonic"
             if image_filename in ("starr_nova_star_drop.png", "starr_nova.png") or "starr_nova" in image_filename or "starrnova" in image_filename:
                 return "starr_nova"
-            # If a template from images/star_drop_types/*star_drop*.png is found,
-            # treat it as a real star_drop state. The old green/title context check
-            # missed the yellow smiley star drop screen on some resolutions/themes.
             return "standard"
     return None
 
