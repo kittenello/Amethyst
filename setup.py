@@ -11,15 +11,15 @@ RESET = "\033[0m"
 
 SPINNER = ["/", "-", "\\", "|"]
 
-art = r"""
-           __  __ ______ _______ _    ___     _______ _______  
+art = r
+"""           __  __ ______ _______ _    ___     _______ _______  
      /\   |  \/  |  ____|__   __| |  | \ \   / / ____|__   __| 
     /  \  | \  / | |__     | |  | |__| |\ \_/ / (___    | |    
    / /\ \ | |\/| |  __|    | |  |  __  | \   / \___ \   | |    
   / ____ \| |  | | |____   | |  | |  | |  | |  ____) |  | |    
  /_/    \_\_|  |_|______|  |_|  |_|  |_|  |_| |_____/   |_|    
-"""
 
+"""
 
 if platform.system() != "Windows" or "microsoft" in platform.uname()[3].lower():
     print("ERROR: This version of Amethyst is for WINDOWS ONLY.")
@@ -502,7 +502,7 @@ if "--pyla-install" in sys.argv:
 
 
 setup(
-    name="Pyla-Biomistik",
+    name="Amethyst",
     version="1.0.0",
     packages=find_packages(exclude=["api", "cfg", "models", "typization"]),
     install_requires=[]
