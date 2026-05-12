@@ -19,6 +19,7 @@ import window_controller
 from discord_control import DiscordControlServer
 from lobby_automation import LobbyAutomation
 from play import Play
+from play_instance_registry import register_play_instance
 from runtime_control import RuntimeControlWindow
 from stage_manager import StageManager
 from state_finder import get_state, get_starr_nova_got_it_button_center, is_starr_nova_info_screen
@@ -102,6 +103,7 @@ def pyla_main(data):
         def __init__(self):
             self.window_controller = WindowController()
             self.Play = Play(*self.load_models(), self.window_controller)
+            register_play_instance(self.Play)  # Register for webapp access
             self.Time_management = TimeManagement()
             self.lobby_automator = LobbyAutomation(self.window_controller)
             self.Stage_manager = StageManager(data, self.lobby_automator, self.window_controller)
