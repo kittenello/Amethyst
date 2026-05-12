@@ -102,9 +102,11 @@ class LobbyAutomation:
             self.window_controller.swipe(int(1700 * wr), int(900 * hr), int(1700 * wr), int(650 * hr), duration=0.8)
             time.sleep(1)
         if not found_brawler:
-            print(f"WARNING: Brawler '{brawler}' was not found after 50 scroll attempts. "
-                  f"The bot will continue with the currently selected brawler.")
-            raise ValueError(f"Brawler '{brawler}' could not be found in the brawler selection menu.")
+            print(f"WARNING: Brawler '{brawler}' was not found after 50 scroll attempts. ")
+            print(f"Detected brawlers during search: {list(reworked_results.keys())}")
+            print(f"Target normalized name: '{target_key}'")
+            print(f"The bot will continue with currently selected brawler.")
+            raise ValueError(f"Brawler '{brawler}' could not be found in brawler selection menu.")
 
     def select_lowest_trophy_brawler(self):
         wr = self.window_controller.width_ratio
@@ -163,8 +165,8 @@ class LobbyAutomation:
     @staticmethod
     def resolve_ocr_typos(potential_brawler_name: str) -> str:
         """
-        Matches well known 'typos' from OCR to the correct brawler's name
-        or returns the original string
+        Matches well known 'typos' from OCR to correct brawler's name
+        or returns original string
         """
 
         matched_typo: str | None = {
@@ -172,6 +174,13 @@ class LobbyAutomation:
             'shlly': BrawlerName.Shelly.value,
             'larryslawrie': BrawlerName.Larry.value,
             '[eon': BrawlerName.Leon.value,
+            'brock': BrawlerName.Brock.value,
+            'brok': BrawlerName.Brock.value,
+            'gal': BrawlerName.Gale.value,
+            'gale': BrawlerName.Gale.value,
+            'darryl': BrawlerName.Darryl.value,
+            'daryl': BrawlerName.Darryl.value,
+            'dary': BrawlerName.Darryl.value,
         }.get(potential_brawler_name, None)
 
         return matched_typo or potential_brawler_name

@@ -6,3 +6,6 @@ class BrawlerName(StrEnum):
     Shelly = 'shelly'
     Larry = 'larrylawrie'
     Leon = 'leon'
+    Brock = 'brock'
+    Gale = 'gale'
+    Darryl = 'darryl'
