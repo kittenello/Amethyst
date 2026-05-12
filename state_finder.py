@@ -143,12 +143,21 @@ def get_in_game_state(image):
     game_result = is_in_end_of_a_match(image)
     if game_result: return f"end_{game_result}"
     if is_in_shop(image): return "shop"
-    if is_in_offer_popup(image): return "popup"
-    if is_in_team_invite_popup(image): return "popup"
-    if is_in_match_making(image): return "match_making"
-    if is_in_lobby(image): return "lobby"
+    
+    if is_in_offer_popup(image):
+        return "popup"
+
     if is_in_brawler_selection(image):
         return "brawler_selection"
+
+    if is_in_match_making(image):
+        return "match_making"
+
+    if is_in_lobby(image):
+        return "lobby"
+
+    if is_in_team_invite_popup(image):
+        return "popup"
 
     if is_in_brawl_pass(image) or is_in_star_road(image):
         return "shop"
@@ -290,59 +299,87 @@ def get_team_invite_reject_button_center(image, image_is_rgb=False):
     width_ratio = current_width / orig_screen_width
     height_ratio = current_height / orig_screen_height
 
-    region = [480, 185, 960, 700]
+    # invite popup only appears in center
+    region = [540, 220, 840, 560]
+
     x = int(region[0] * width_ratio)
     y = int(region[1] * height_ratio)
     w = int(region[2] * width_ratio)
     h = int(region[3] * height_ratio)
+
     crop = image[y:y + h, x:x + w]
+
     if crop.size == 0:
         return None
 
     color_conversion = cv2.COLOR_RGB2HSV if image_is_rgb else cv2.COLOR_BGR2HSV
     hsv = cv2.cvtColor(crop, color_conversion)
+
+    # popup background must be strongly blue
     blue_mask = cv2.inRange(
         hsv,
-        np.array((90, 80, 80), dtype=np.uint8),
-        np.array((120, 255, 255), dtype=np.uint8),
+        np.array((95, 120, 70), dtype=np.uint8),
+        np.array((125, 255, 255), dtype=np.uint8),
     )
+
     blue_ratio = cv2.countNonZero(blue_mask) / max(1, crop.shape[0] * crop.shape[1])
-    if blue_ratio < 0.30:
+
+    # stronger requirement
+    if blue_ratio < 0.42:
         return None
 
-    lower_half = hsv[int(h * 0.45):h, :]
+    lower_half = hsv[int(h * 0.52):h, :]
+
     red_mask_low = cv2.inRange(
         lower_half,
-        np.array((0, 90, 90), dtype=np.uint8),
+        np.array((0, 120, 100), dtype=np.uint8),
         np.array((10, 255, 255), dtype=np.uint8),
     )
+
     red_mask_high = cv2.inRange(
         lower_half,
-        np.array((170, 90, 90), dtype=np.uint8),
+        np.array((170, 120, 100), dtype=np.uint8),
         np.array((179, 255, 255), dtype=np.uint8),
     )
+
     red_mask = cv2.bitwise_or(red_mask_low, red_mask_high)
-    contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    contours, _ = cv2.findContours(
+        red_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
     if not contours:
         return None
 
-    min_area = max(600, crop.shape[0] * crop.shape[1] * 0.015)
-    candidates = []
+    min_area = max(1200, crop.shape[0] * crop.shape[1] * 0.02)
+
     for contour in contours:
         area = cv2.contourArea(contour)
+
         bx, by, bw, bh = cv2.boundingRect(contour)
-        if area < min_area or bw < w * 0.18 or bh < h * 0.08:
-            continue
-        absolute_by = by + int(h * 0.45)
-        if bx > w * 0.55:
-            continue
-        candidates.append((area, bx, absolute_by, bw, bh))
 
-    if not candidates:
-        return None
+        # reject tiny/random UI
+        if area < min_area:
+            continue
 
-    _, bx, by, bw, bh = max(candidates, key=lambda item: item[0])
-    return int(x + bx + bw / 2), int(y + by + bh / 2)
+        # reject weird shapes
+        aspect = bw / max(1, bh)
+
+        if aspect < 1.8 or aspect > 5.5:
+            continue
+
+        # reject buttons too high
+        if by < h * 0.50:
+            continue
+
+        center_x = int(x + bx + bw / 2)
+        center_y = int(y + int(h * 0.52) + by + bh / 2)
+
+        return center_x, center_y
+
+    return None
 
 
 def is_in_team_invite_popup(image) -> bool:
