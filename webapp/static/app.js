@@ -3,7 +3,6 @@ let selectedBrawler = null;
 let selectedType = "trophies";
 let selectedPlaystyle = "";
 let historySort = "matches";
-let lang = "en";
 let playerTrophies = {};
 let playerPowers = {};
 let playerName = "Player";
@@ -16,10 +15,6 @@ let brawlersMultiMode = false;
 let activeInstanceKey = "main";
 let instanceProfiles = {};
 
-const tr = {
-  en: { dashboard: "Dashboard", multi: "Multi-Instance", brawlers: "Brawlers", playstyles: "Playstyles", history: "History", logging: "Logging", settings: "Settings", multi: "Multi-Instance" },
-  ru: { dashboard: "\u041f\u0430\u043d\u0435\u043b\u044c", multi: "Multi-Instance", brawlers: "\u0411\u043e\u0439\u0446\u044b", playstyles: "\u0421\u0442\u0438\u043b\u0438", history: "\u0418\u0441\u0442\u043e\u0440\u0438\u044f", logging: "\u041b\u043e\u0433\u0438", settings: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438" }
-};
 
 const $ = (id) => document.getElementById(id);
 
@@ -228,7 +223,16 @@ function renderAll() {
 function switchView(view) {
   document.querySelectorAll(".view").forEach(el => el.classList.toggle("active", el.id === view));
   document.querySelectorAll(".nav").forEach(el => el.classList.toggle("active", el.dataset.view === view));
-  $("pageTitle").textContent = tr[lang][view] || view;
+  const titles = {
+    dashboard: "Dashboard",
+    multi: "Multi-Instance", 
+    brawlers: "Brawlers",
+    playstyles: "Playstyles",
+    history: "History",
+    logging: "Logging",
+    settings: "Settings"
+  };
+  $("pageTitle").textContent = titles[view] || view;
 }
 
 function renderDashboard() {
@@ -496,11 +500,18 @@ function renderLogging() {
     ["telegram", "Telegram", state.logging?.telegram || {}]
   ];
   $("loggingGrid").innerHTML = groups.map(([section, title, data]) => {
-    const test = section === "telegram" ? `<button id="telegramTest" class="secondary full-button">Check Test</button><p id="telegramTestStatus" class="tiny-status"></p>` : "";
+    const test = section === "telegram" ? `
+      <button id="telegramTest" class="secondary full-button">Test Message</button>
+      <button id="espDebug" class="secondary full-button">Debug View</button>
+      <button id="startTelegramBot" class="primary full-button">Start Telegram Bot</button>
+      <p id="telegramTestStatus" class="tiny-status"></p>
+    ` : "";
     return `<div class="setting-group"><div class="eyebrow">${title.toUpperCase()}</div>${Object.entries(data).filter(([key]) => !key.startsWith("#")).map(([key, value]) => settingRow(section, key, value)).join("")}${test}</div>`;
   }).join("");
   document.querySelectorAll("#loggingGrid [data-setting]").forEach(input => input.onchange = saveSetting);
   if ($("telegramTest")) $("telegramTest").onclick = sendTelegramTest;
+  if ($("espDebug")) $("espDebug").onclick = sendEspDebug;
+  if ($("startTelegramBot")) $("startTelegramBot").onclick = startTelegramBot;
 }
 
 async function sendTelegramTest() {
@@ -508,6 +519,34 @@ async function sendTelegramTest() {
   try {
     const res = await api("/api/logging/telegram-test", { method: "POST", body: "{}" });
     $("telegramTestStatus").textContent = res.ok ? "Test message sent." : "Telegram returned an error.";
+  } catch (err) {
+    $("telegramTestStatus").textContent = err.message;
+  }
+}
+
+async function sendEspDebug() {
+  $("telegramTestStatus").textContent = "Sending ESP debug...";
+  try {
+    const res = await api("/api/logging/esp-debug", { method: "POST", body: "{}" });
+    if (res.ok) {
+      $("telegramTestStatus").textContent = res.message || "ESP debug screenshot sent!";
+    } else {
+      $("telegramTestStatus").textContent = res.error || "Failed to send ESP debug.";
+    }
+  } catch (err) {
+    $("telegramTestStatus").textContent = err.message;
+  }
+}
+
+async function startTelegramBot() {
+  $("telegramTestStatus").textContent = "Starting Telegram bot...";
+  try {
+    const res = await api("/api/logging/telegram-start", { method: "POST", body: "{}" });
+    if (res.ok) {
+      $("telegramTestStatus").textContent = "Telegram bot started successfully!";
+    } else {
+      $("telegramTestStatus").textContent = res.error || "Failed to start Telegram bot.";
+    }
   } catch (err) {
     $("telegramTestStatus").textContent = err.message;
   }
@@ -624,13 +663,6 @@ $("selectedPlaystyle").ondragover = ev => ev.preventDefault();
 $("selectedPlaystyle").ondrop = ev => { ev.preventDefault(); selectPlaystyle(ev.dataTransfer.getData("text/plain")); };
 $("importPlaystyle").onclick = () => $("playstyleFile").click();
 $("playstyleFile").onchange = ev => importPlaystyleFile(ev.target.files[0]);
-$("langToggle").onclick = () => {
-  lang = lang === "en" ? "ru" : "en";
-  $("langToggle").textContent = lang === "en" ? "English" : "\u0420\u0443\u0441\u0441\u043a\u0438\u0439";
-  document.querySelectorAll("[data-i18n]").forEach(el => el.textContent = tr[lang][el.dataset.i18n]);
-  const active = document.querySelector(".view.active").id;
-  $("pageTitle").textContent = tr[lang][active] || active;
-};
 $("clearQueue").onclick = async () => {
   if (brawlersMultiMode) {
     state.queue = [];

@@ -27,7 +27,9 @@ from utils import (
     save_brawler_data,
     save_dict_as_toml,
 )
-from telegram_notifier import async_send_test_message
+from telegram_notifier import async_send_test_notification, async_notify_user, load_telegram_settings, _image_bytes
+from play_instance_registry import get_play_instance
+import aiohttp
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1010,10 +1012,97 @@ class WebApp:
 
     def send_telegram_test(self):
         try:
-            ok = asyncio.run(async_send_test_message())
+            ok = asyncio.run(async_send_test_notification())
         except Exception as exc:
             raise ValueError(str(exc))
         return {"ok": bool(ok)}
+
+    def start_telegram_bot(self):
+        """Start Telegram bot in current process"""
+        try:
+            import threading
+            import asyncio
+            from telegram.bot import main as telegram_main
+            
+            # Start telegram bot in background thread
+            def run_telegram():
+                try:
+                    asyncio.run(telegram_main())
+                except Exception as e:
+                    print(f"Telegram bot error: {e}")
+            
+            thread = threading.Thread(target=run_telegram, daemon=True)
+            thread.start()
+            
+            return {"ok": True, "message": "Telegram bot started in background thread"}
+        except Exception as exc:
+            raise ValueError(str(exc))
+
+    def send_esp_debug(self):
+        """Send ESP debug screenshot to Telegram"""
+        try:
+            play_instance = get_play_instance()
+            if not play_instance:
+                raise ValueError("Bot is not running - no Play instance available")
+            
+            # Get current frame and detection data
+            current_frame = getattr(play_instance, 'current_frame', None)
+            if current_frame is None:
+                raise ValueError("No current frame available - bot must be in game")
+            
+            # Get the last detection data
+            detection_data = {
+                "player": getattr(play_instance, '_last_player_data', []),
+                "enemy": getattr(play_instance, '_last_enemy_data', []), 
+                "teammate": getattr(play_instance, '_last_teammate_data', []),
+                "wall": getattr(play_instance, '_last_wall_data', []),
+                "water": getattr(play_instance, '_last_water_data', [])
+            }
+            
+            # Create ESP debug image
+            esp_image = play_instance.create_esp_debug_image(
+                current_frame, 
+                detection_data, 
+                getattr(play_instance, 'current_brawler', None)
+            )
+            
+            if esp_image is None:
+                raise ValueError("Failed to create ESP debug image")
+            
+            # Check Telegram settings manually
+            settings = load_telegram_settings()
+            token = settings.get("bot_token", "").strip()
+            chat_id = settings.get("chat_id", "").strip()
+            
+            if not token or not chat_id:
+                raise ValueError("Telegram bot token or chat ID is not configured. Please fill these settings in Logging → Telegram section.")
+            
+            # Send directly to Telegram API
+            image_bytes = _image_bytes(esp_image)
+            if not image_bytes:
+                raise ValueError("Failed to process ESP debug image")
+            
+            text = f"🔍 <b>ESP Debug View</b>\n\n<b>Brawler:</b> {getattr(play_instance, 'current_brawler', 'Unknown')}\n<b>State:</b> Debug screenshot with ESP visualization\n\n🟢 Player | 🔴 Enemy | 🔵 Teammate | ⬜ Walls | 🔷 Water"
+            
+            async def send_direct():
+                async with aiohttp.ClientSession() as session:
+                    form = aiohttp.FormData()
+                    form.add_field("chat_id", chat_id)
+                    form.add_field("caption", text)
+                    form.add_field("parse_mode", "HTML")
+                    form.add_field("photo", image_bytes, filename="esp_debug.png", content_type="image/png")
+                    async with session.post(f"https://api.telegram.org/bot{token}/sendPhoto", data=form, timeout=20) as response:
+                        return response.status == 200
+            
+            ok = asyncio.run(send_direct())
+            
+            if ok:
+                return {"ok": True, "message": "ESP debug screenshot sent to Telegram!"}
+            else:
+                raise ValueError("Failed to send to Telegram - check bot token and chat ID")
+            
+        except Exception as exc:
+            raise ValueError(str(exc))
 
     def load_player_trophies(self, player_tag_override=None):
         print("[WEBAPP][PLAYER] Loading player data via brawltracker + api/assets/brawler_icons2")
@@ -1153,6 +1242,10 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
                 return self.send_json(self.web_app.delete_playstyle(payload))
             if parsed.path == "/api/logging/telegram-test":
                 return self.send_json(self.web_app.send_telegram_test())
+            if parsed.path == "/api/logging/telegram-start":
+                return self.send_json(self.web_app.start_telegram_bot())
+            if parsed.path == "/api/logging/esp-debug":
+                return self.send_json(self.web_app.send_esp_debug())
             if parsed.path == "/api/multi/start":
                 return self.send_json(self.web_app.multi.start_instance(payload))
             if parsed.path == "/api/multi/stop":
