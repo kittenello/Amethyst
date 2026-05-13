@@ -115,14 +115,19 @@ def pyla_main(data):
                 first_brawler = first_row.get('brawler')
                 print(f"Picking brawler automatically before first match: {first_brawler}")
                 selection_method = first_row.get('selection_method', 'named_brawler')
+                selected = False
                 try:
                     if selection_method == 'lowest_trophies':
                         selected = self.lobby_automator.select_lowest_trophy_brawler()
                         if not selected and first_brawler:
                             print("Lowest-trophy quick select failed, falling back to named brawler selection.")
                             self.lobby_automator.select_brawler(first_brawler)
+                            selected = True
                     elif first_brawler:
                         self.lobby_automator.select_brawler(first_brawler)
+                        selected = True
+                    if selected:
+                        self.Stage_manager.mark_current_queue_entry_selected()
                 except Exception as e:
                     print(f"Initial auto-pick failed: {e}. The stage manager will retry from lobby.")
             self.Play.current_brawler = first_row.get('brawler', 'none')
@@ -961,9 +966,6 @@ def run_app():
     latest_version = pyla_version if api_base_url == "localhost" else get_latest_version()
     web_app = WebApp(set_data, all_brawlers, pyla_version, latest_version)
 
-    # Keep the dashboard server alive after Stop or after completing a queue.
-    # The old code launched pyla_main once and then run_app returned, so the
-    # dashboard button could not start a fresh bot loop.
     web_app.start()
     while True:
         if selected_data:

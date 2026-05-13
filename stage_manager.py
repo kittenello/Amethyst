@@ -69,6 +69,7 @@ class StageManager:
         # This makes the webapp checkbox work even when the queue is edited from
         # the browser and prevents re-opening the brawler picker every lobby tick.
         self.last_auto_selected_queue_key = None
+        self.push_all_needs_selection = False
         time_thresholds = load_toml_as_dict("./cfg/time_tresholds.toml")
         self.end_screen_dismiss_delay = float(time_thresholds.get("end_screen_dismiss_delay", 0.35))
         self.window_controller = window_controller
@@ -179,6 +180,34 @@ class StageManager:
             self._number_or_default(row.get("push_until", 0), 0),
         )
 
+    def mark_current_queue_entry_selected(self):
+        queue_key = self._current_queue_key()
+        if queue_key is not None:
+            self.last_auto_selected_queue_key = queue_key
+
+    def current_detected_state(self):
+        try:
+            return get_state(self.window_controller.screenshot())
+        except Exception as e:
+            print(f"Could not read current state: {e}")
+            return "unknown"
+
+    def ensure_lobby_before_selection(self, action):
+        state = self.current_detected_state()
+        if state == "lobby":
+            return True
+        print(f"{action} skipped: current state is {state}, not lobby.")
+        self.window_controller.keys_up(list("wasd"))
+        return False
+
+    def ensure_lobby_before_start(self):
+        state = self.current_detected_state()
+        if state == "lobby":
+            return True
+        print(f"Start press skipped: current state changed to {state}; not pressing Q outside lobby.")
+        self.window_controller.keys_up(list("wasd"))
+        return False
+
     def auto_select_current_brawler_if_needed(self):
         """Select the current queue brawler before starting a match when enabled.
 
@@ -202,12 +231,17 @@ class StageManager:
         print(f"Auto-pick enabled for current queue entry: {brawler_name}")
 
         try:
-            if selection_method == "lowest_trophies":
+            if not self.ensure_lobby_before_selection("Auto-pick"):
+                selected = False
+            elif selection_method == "lowest_trophies":
                 selected = self.Lobby_automation.select_lowest_trophy_brawler()
                 if not selected and brawler_name:
-                    print("Lowest-trophy selection failed, falling back to named brawler selection.")
-                    self.Lobby_automation.select_brawler(brawler_name)
-                    selected = True
+                    if not self.ensure_lobby_before_selection("Lowest-trophy named fallback"):
+                        selected = False
+                    else:
+                        print("Lowest-trophy selection failed, falling back to named brawler selection.")
+                        self.Lobby_automation.select_brawler(brawler_name)
+                        selected = True
             else:
                 if brawler_name:
                     self.Lobby_automation.select_brawler(brawler_name)
@@ -223,7 +257,7 @@ class StageManager:
             self.window_controller.keys_up(list("wasd"))
             return False
 
-        self.last_auto_selected_queue_key = queue_key
+        self.mark_current_queue_entry_selected()
         return True
 
     def _prepare_next_push_all_brawler(self, target, type_of_push="trophies"):
@@ -374,7 +408,9 @@ class StageManager:
         if len(refreshed_rows) != len(self.brawlers_pick_data):
             changed = True
 
-        if new_order != old_order:
+        old_front = old_order[0] if old_order else None
+        new_front = new_order[0] if new_order else None
+        if new_front != old_front:
             self.last_auto_selected_queue_key = None
         self.brawlers_pick_data = refreshed_rows
 
@@ -487,18 +523,25 @@ class StageManager:
                         print("Could not confirm the next brawler selection reached lobby; delaying match start.")
                         self.window_controller.keys_up(list("wasd"))
                         return
+                    self.mark_current_queue_entry_selected()
             else:
                 print("Next brawler is in manual mode, waiting 10 seconds to let user switch.")
 
         elif self.push_all_needs_selection:
             print("Push All queue changed from API; selecting the new lowest trophy brawler.")
+            if not self.ensure_lobby_before_selection("API-refreshed lowest-trophy selection"):
+                return 0
             selected = self.Lobby_automation.select_lowest_trophy_brawler()
             if not selected:
                 print("Could not confirm the API-refreshed brawler selection reached lobby; delaying match start.")
                 self.window_controller.keys_up(list("wasd"))
                 return
+            self.mark_current_queue_entry_selected()
 
         if not self.auto_select_current_brawler_if_needed():
+            return 0
+
+        if not self.ensure_lobby_before_start():
             return 0
 
         # q btn is over the start btn
@@ -621,7 +664,11 @@ class StageManager:
             self.window_controller.press_key("Q")
             return
 
-        self.Lobby_automation.select_lowest_trophy_brawler()
+        if self.Lobby_automation.select_lowest_trophy_brawler():
+            self.mark_current_queue_entry_selected()
+        else:
+            print("Could not switch after prestige reward; delaying next match start.")
+            self.window_controller.keys_up(list("wasd"))
 
     def end_game(self):
         screenshot = self.window_controller.screenshot()

@@ -34,6 +34,12 @@ class LobbyAutomation:
             self.window_controller.click(int(535 * wr), int(615 * hr))
 
     def select_brawler(self, brawler):
+        current_state = self.current_state()
+        if current_state != "lobby":
+            raise RuntimeError(
+                f"Named brawler selection skipped: current state is {current_state}, not lobby."
+            )
+
         self.window_controller.screenshot()
         wr = self.window_controller.width_ratio
         hr = self.window_controller.height_ratio
@@ -108,7 +114,22 @@ class LobbyAutomation:
             print(f"The bot will continue with currently selected brawler.")
             raise ValueError(f"Brawler '{brawler}' could not be found in brawler selection menu.")
 
+    def current_state(self):
+        try:
+            return get_state(self.window_controller.screenshot())
+        except Exception as e:
+            print(f"Could not read current state before brawler selection: {e}")
+            return "unknown"
+
     def select_lowest_trophy_brawler(self):
+        current_state = self.current_state()
+        if current_state != "lobby":
+            print(
+                "Lowest-trophy brawler selection skipped: "
+                f"current state is {current_state}, not lobby."
+            )
+            return False
+
         wr = self.window_controller.width_ratio
         hr = self.window_controller.height_ratio
 
@@ -125,9 +146,15 @@ class LobbyAutomation:
         if self.ensure_lobby_after_selection():
             return True
 
+        recovery_state = self.current_state()
+        if recovery_state != "brawler_selection":
+            print(
+                "Lowest-trophy brawler selection failed and recovery is blocked: "
+                f"current state is {recovery_state}, not brawler_selection."
+            )
+            return False
+
         print("Lowest-trophy brawler selection did not return to lobby; trying one recovery pass.")
-        self.press_back()
-        time.sleep(0.8)
         tap(260, 991, 1.0)   # Select again if the brawler details screen is still open
         return self.ensure_lobby_after_selection()
 
@@ -147,10 +174,12 @@ class LobbyAutomation:
                     int(260 * self.window_controller.width_ratio),
                     int(991 * self.window_controller.height_ratio),
                 )
-            elif state == "match":
-                # Immediately after selecting a brawler, "match" usually means
-                # an unrecognized brawler details/stats screen, not a real game.
-                self.press_back()
+            elif state in ("match", "match_making"):
+                print(
+                    "Brawler selection verification saw "
+                    f"{state}; stopping selection so it does not tap during a match."
+                )
+                return False
             time.sleep(0.7)
         return False
 
