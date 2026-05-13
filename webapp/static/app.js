@@ -671,7 +671,9 @@ async function startBot() {
     }
     
     // Sync with server after a delay
-    setTimeout(() => updateStartState(false), 2000);
+    setTimeout(async () => {
+  await refreshRuntime();
+}, 2000);
     
   } catch (e) {
     console.error("[WEBAPP] Error in startBot:", e);

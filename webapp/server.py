@@ -692,6 +692,8 @@ class WebApp:
         self.host = host
         self.port = self._pick_port(port)
         self.ready = threading.Event()
+        self.runtime_state = "idle"
+        self.runtime_lock = threading.Lock()
         self.server = None
         self.thread = None
         self.selected_data = None
@@ -762,39 +764,24 @@ class WebApp:
         return rows
 
     def get_runtime_state(self, queue):
-        state = "idle"
+        with self.runtime_lock:
+            state = self.runtime_state
+
         ips = 0.0
         current_brawler = None
         runtime_file = ROOT / "logs" / "web_runtime.json"
+
         try:
             runtime = json.loads(runtime_file.read_text(encoding="utf-8"))
-            state = str(runtime.get("state") or state)
             ips = runtime.get("ips", ips)
             current_brawler = runtime.get("currentBrawler")
         except Exception:
             runtime = {}
-        stop_flag = (ROOT / "logs" / "web_stop_requested.flag").exists()
-        found_state_file = False
-        for path in (ROOT / "logs").glob("runtime_control_*.state"):
-            try:
-                control_state = path.read_text(encoding="utf-8", errors="ignore").strip()
-                found_state_file = True
-                if control_state == "stopped":
-                    state = "idle"
-                    break
-                if control_state == "running" and state == "idle":
-                    state = "running"
-                    break
-            except OSError:
-                pass
-        # If no state files yet but ready event is set (bot starting up), treat as running
-        if not found_state_file and not stop_flag and self.ready.is_set():
-            if state == "idle":
-                state = "running"
+
         current = queue[0] if queue else {}
         return {
             "state": state,
-            "running": state not in ("idle", "stopped", ""),
+            "running": state in ("running", "starting"),
             "session": current.get("brawler", "none"),
             "currentBrawler": current_brawler or current.get("brawler", "none"),
             "progressCurrent": int(current.get(current.get("type", "trophies"), 0) or 0) if current else 0,
@@ -912,10 +899,19 @@ class WebApp:
         self.selected_data = queue
         self.data_setter(queue)
         self.ready.set()
-        return {"ok": True}
+        with self.runtime_lock:
+            self.runtime_state = "running"
+        return {"ok": True, "state": "running"}
 
     def stop_bot(self):
         logs_dir = ROOT / "logs"
+
+        # reset runtime ready state so frontend
+        # does not switch back into STOP state
+        try:
+            self.ready.clear()
+        except Exception:
+            pass
         logs_dir.mkdir(exist_ok=True)
         (logs_dir / "web_stop_requested.flag").write_text("stopped", encoding="utf-8")
         stopped_any = False
@@ -925,7 +921,9 @@ class WebApp:
                 stopped_any = True
             except OSError:
                 pass
-        return {"ok": True, "stopped": stopped_any}
+        with self.runtime_lock:
+            self.runtime_state = "stopped"
+        return {"ok": True, "stopped": stopped_any, "state": "stopped"}
 
     def save_queue_bulk(self, payload):
         queue = payload.get("queue")
