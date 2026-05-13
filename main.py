@@ -103,7 +103,8 @@ def pyla_main(data):
         def __init__(self):
             self.window_controller = WindowController()
             self.Play = Play(*self.load_models(), self.window_controller)
-            register_play_instance(self.Play)  # Register for webapp access
+            self.onnx_backend = self.Play.get_onnx_backend_status()
+            register_play_instance(self.Play)
             self.Time_management = TimeManagement()
             self.lobby_automator = LobbyAutomation(self.window_controller)
             self.Stage_manager = StageManager(data, self.lobby_automator, self.window_controller)
@@ -247,11 +248,14 @@ def pyla_main(data):
                 if not force and now - self._last_web_runtime_write < self.web_runtime_interval:
                     return
                 current = self.Stage_manager.brawlers_pick_data[0] if self.Stage_manager.brawlers_pick_data else {}
+                self.onnx_backend = self.Play.get_onnx_backend_status()
                 payload = {
                     "state": self.state or "idle",
                     "currentBrawler": current.get("brawler", "none"),
                     "queued": len(self.Stage_manager.brawlers_pick_data),
                     "ips": round(float(self.ips_ema or 0), 1),
+                    "onnxBackend": self.onnx_backend,
+                    "performanceStatus": self.format_performance_status(self.ips_ema or 0),
                 }
                 if not force and payload == self._last_web_runtime_payload:
                     self._last_web_runtime_write = now
@@ -327,6 +331,10 @@ def pyla_main(data):
             self.ips_ema = None
             if recovered:
                 self.low_ips_recovery_attempts = 0
+
+        def format_performance_status(self, ips):
+            self.onnx_backend = self.Play.get_onnx_backend_status()
+            return f"{float(ips):.2f} IPS | ONNX: {self.onnx_backend or 'unknown'}"
 
         @staticmethod
         def update_ema(current, sample, weight=0.25):
@@ -845,10 +853,10 @@ def pyla_main(data):
 
                 if abs(s_time - time.time()) > 1:
                     elapsed = time.time() - s_time
-                    if elapsed > 0 and not self.visual_debug:
+                    if elapsed > 0 and not self.visual_debug and (c > 0 or self.ips_ema is not None):
                         current_ips = c / elapsed
                         self.ips_ema = current_ips if self.ips_ema is None else (self.ips_ema * 0.75 + current_ips * 0.25)
-                        print(f"{self.ips_ema:.2f} IPS")
+                        print(self.format_performance_status(self.ips_ema))
                         if self.recover_low_ips(self.ips_ema):
                             s_time = time.time()
                             c = 0
@@ -887,7 +895,7 @@ def pyla_main(data):
                 if frame_id == self.last_processed_frame_id:
                     self.perf_duplicate_waits += 1
                     self.recover_slow_feed()
-                    time.sleep(0.002)  # 2ms instead of 10ms — faster reaction to new frames
+                    time.sleep(0.002)
                     continue
                 self.last_processed_frame_id = frame_id
 

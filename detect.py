@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import warnings
@@ -35,7 +36,6 @@ def get_optimal_threads(max_limit=4):
 
 
 _provider_message_printed = False
-# Cache thread count at module level (same as pylaai approach) to avoid re-reading config repeatedly
 _optimal_threads_amount = None
 
 
@@ -57,18 +57,63 @@ def _directml_provider():
         return "DmlExecutionProvider"
 
 
+def _config_bool(config, key, default=False):
+    value = config.get(key, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _tensorrt_provider():
+    general_config = load_toml_as_dict("cfg/general_config.toml")
+    cache_dir = os.path.join("logs", "tensorrt_engine_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    options = {
+        "trt_fp16_enable": _config_bool(general_config, "tensorrt_fp16", True),
+        "trt_engine_cache_enable": True,
+        "trt_engine_cache_path": cache_dir,
+        "trt_timing_cache_enable": True,
+        "trt_timing_cache_path": cache_dir,
+    }
+
+    device_id = general_config.get("tensorrt_device_id", general_config.get("cuda_device_id", "auto"))
+    if str(device_id).strip().lower() not in ("", "auto", "none"):
+        try:
+            options["device_id"] = int(device_id)
+        except (TypeError, ValueError):
+            print(f"Ignoring invalid tensorrt_device_id={device_id!r}; using default TensorRT adapter.")
+
+    workspace = general_config.get("tensorrt_workspace_size")
+    if str(workspace).strip().lower() not in ("", "auto", "none"):
+        try:
+            options["trt_max_workspace_size"] = int(workspace)
+        except (TypeError, ValueError):
+            print(f"Ignoring invalid tensorrt_workspace_size={workspace!r}; using TensorRT default workspace.")
+
+    return ("TensorrtExecutionProvider", options)
+
+
 def _build_providers(preferred_device):
     global _provider_message_printed
     preferred_device = str(preferred_device or "auto").strip().lower()
     available_providers = set(ort.get_available_providers())
     providers = []
 
-    if preferred_device in ("gpu", "auto", "cuda"):
+    if preferred_device in ("tensorrt", "trt"):
+        if "TensorrtExecutionProvider" in available_providers:
+            providers.append(_tensorrt_provider())
+        else:
+            print(
+                "TensorRT was requested but TensorrtExecutionProvider is not available. "
+                f"Available ONNX providers: {', '.join(ort.get_available_providers())}. Falling back to CUDA/CPU."
+            )
+
+    if preferred_device in ("gpu", "auto", "cuda", "tensorrt", "trt"):
         if "CUDAExecutionProvider" in available_providers:
             providers.append((
                 "CUDAExecutionProvider",
                 {
-                    "cudnn_conv_algo_search": "DEFAULT",
+                    "cudnn_conv_algo_search": "EXHAUSTIVE",
                 },
             ))
 
@@ -106,11 +151,33 @@ def _provider_name(provider):
     return provider[0] if isinstance(provider, tuple) else provider
 
 
+def format_onnx_backend(provider_name):
+    provider_name = str(provider_name or "").strip()
+    provider_labels = {
+        "TensorrtExecutionProvider": "TensorrtExecutionProvider",
+        "CUDAExecutionProvider": "CUDAExecutionProvider",
+        "CPUExecutionProvider": "CPUExecutionProvider",
+        "DmlExecutionProvider": "DirectML",
+        "OpenVINOExecutionProvider": "OpenVINO",
+    }
+    return provider_labels.get(provider_name, "unknown")
+
+
+def _preferred_profile_provider(provider_counts):
+    for provider_name in (
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "DmlExecutionProvider",
+            "OpenVINOExecutionProvider",
+            "CPUExecutionProvider",
+    ):
+        if provider_counts.get(provider_name, 0) > 0:
+            return provider_name
+    return None
+
+
 def _configure_session_options_for_provider(session_options, provider_name):
     if provider_name == "DmlExecutionProvider":
-        # ONNX Runtime documents these as required for DirectML sessions.
-        # Without them some Windows/NVIDIA/AMD setups can initialize but run
-        # extremely slowly or fall back unpredictably.
         session_options.enable_mem_pattern = False
         session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
@@ -205,6 +272,9 @@ class Detect:
             raise FileNotFoundError(f"Model file not found: {model_path}")
 
         self.model, self.device = self.load_model()
+        self.verified_device = self.device if self.device == "CPUExecutionProvider" else None
+        self.profile_provider_counts = {}
+        self._profile_checked = self.device == "CPUExecutionProvider"
         self.input_name = self.model.get_inputs()[0].name
         self.output_names = [output.name for output in self.model.get_outputs()]
         self._padded_img_buffer = np.full(
@@ -220,19 +290,80 @@ class Detect:
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         providers = _build_providers(self.preferred_device)
         first_provider = _provider_name(providers[0])
+        if first_provider != "CPUExecutionProvider":
+            so.enable_profiling = True
+            os.makedirs("logs", exist_ok=True)
+            model_name = os.path.splitext(os.path.basename(self.model_path))[0]
+            so.profile_file_prefix = os.path.join("logs", f"ort_profile_{model_name}")
         _configure_session_options_for_provider(so, first_provider)
         optimal_threads_amount = _get_cached_optimal_threads()
         if first_provider == "CPUExecutionProvider":
-            # Disable spinning only on CPU to reduce idle CPU usage
             so.add_session_config_entry("session.intra_op.allow_spinning", "0")
             so.intra_op_num_threads = optimal_threads_amount
             so.inter_op_num_threads = max(1, min(2, optimal_threads_amount))
         else:
-            # For GPU providers (CUDA/DirectML): keep spinning enabled for lowest latency
             so.intra_op_num_threads = 1
             so.inter_op_num_threads = 1
         model = ort.InferenceSession(self.model_path, sess_options=so, providers=providers)
         return model, model.get_providers()[0]
+
+    def get_backend_provider(self):
+        if self.verified_device:
+            return self.verified_device
+        if self.device == "CPUExecutionProvider":
+            return self.device
+        return None
+
+    def _record_profiled_provider(self):
+        if self._profile_checked:
+            return
+        self._profile_checked = True
+        profile_path = None
+        try:
+            profile_path = self.model.end_profiling()
+            if not profile_path or not os.path.exists(profile_path):
+                print(
+                    f"Could not verify ONNX execution provider for {os.path.basename(self.model_path)}: "
+                    "ONNX Runtime did not produce a profile file."
+                )
+                return
+
+            with open(profile_path, "r", encoding="utf-8") as profile_file:
+                events = json.load(profile_file)
+
+            provider_counts = {}
+            for event in events:
+                provider_name = event.get("args", {}).get("provider")
+                if provider_name:
+                    provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
+
+            self.profile_provider_counts = provider_counts
+            self.verified_device = _preferred_profile_provider(provider_counts)
+            if self.verified_device:
+                counts = ", ".join(
+                    f"{provider}={count}" for provider, count in sorted(provider_counts.items())
+                )
+                print(
+                    f"Verified ONNX execution for {os.path.basename(self.model_path)}: "
+                    f"{format_onnx_backend(self.verified_device)} ({counts})."
+                )
+            else:
+                print(
+                    f"Could not verify ONNX execution provider for {os.path.basename(self.model_path)} "
+                    "from the runtime profile; reporting unknown until a provider is observed."
+                )
+        except Exception as e:
+            self.verified_device = None
+            print(
+                f"Could not verify ONNX execution provider for {os.path.basename(self.model_path)}: {e}. "
+                "Keeping ONNX backend as unknown instead of stopping the bot."
+            )
+        finally:
+            if profile_path:
+                try:
+                    os.remove(profile_path)
+                except OSError:
+                    pass
 
     def preprocess_image(self, img):
         h, w = img.shape[:2]
@@ -277,6 +408,7 @@ class Detect:
         orig_h, orig_w = img.shape[:2]
         preprocessed_img, resized_w, resized_h = self.preprocess_image(img)
         outputs = self.model.run(self.output_names, {self.input_name: preprocessed_img})
+        self._record_profiled_provider()
         detections = self.postprocess(outputs, (orig_h, orig_w), (resized_w, resized_h), conf_tresh)
 
         results = {}

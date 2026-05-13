@@ -8,7 +8,7 @@ import time
 import cv2
 import numpy as np
 from state_finder import get_state
-from detect import Detect
+from detect import Detect, format_onnx_backend
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info
 
 brawl_stars_width, brawl_stars_height = 1920, 1080
@@ -57,10 +57,6 @@ class Movement:
         self.attack_cooldown = float(bot_config.get("attack_cooldown", 0.16))
         self.last_attack_time = 0.0
         self.TILE_SIZE = 60
-        # Wall-based stuck detector: samples wall bboxes on an interval, ignores
-        # walls near the player (they flicker as he overlaps them), and flags
-        # "stuck" when walls don't move for wall_stuck_timeout seconds while the
-        # bot is trying to move. Triggers a semicircle escape maneuver.
         self.wall_stuck_enabled = str(bot_config.get("wall_stuck_enabled", "yes")).lower() in ("yes", "true", "1")
         general_config = load_toml_as_dict("cfg/general_config.toml")
         self.wall_stuck_debug = str(general_config.get("wall_stuck_debug", "no")).lower() in ("yes", "true", "1")
@@ -557,6 +553,13 @@ class Play(Movement):
         self.playstyle_code = None
         self._playstyle_error_reported = False
         self.load_playstyle()
+
+    def get_onnx_backend_status(self):
+        for detector in (self.Detect_main_info, self.Detect_tile_detector):
+            backend = format_onnx_backend(detector.get_backend_provider())
+            if backend != "unknown":
+                return backend
+        return "unknown"
 
     def load_playstyle(self):
         if not self.playstyle_name:
