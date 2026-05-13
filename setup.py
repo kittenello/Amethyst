@@ -11,8 +11,8 @@ RESET = "\033[0m"
 
 SPINNER = ["/", "-", "\\", "|"]
 
-art = r
-"""           __  __ ______ _______ _    ___     _______ _______  
+art = """
+           __  __ ______ _______ _    ___     _______ _______  
      /\   |  \/  |  ____|__   __| |  | \ \   / / ____|__   __| 
     /  \  | \  / | |__     | |  | |__| |\ \_/ / (___    | |    
    / /\ \ | |\/| |  __|    | |  |  __  | \   / \___ \   | |    
@@ -288,6 +288,18 @@ def setup_pyla():
     enable_ansi()
 
     target, ver, name = get_gpu_data()
+    
+    config_gpu = None
+    try:
+        import toml
+        config = toml.load("cfg/general_config.toml")
+        # cpu_or_gpu is a top-level key in general_config.toml (no [general] section)
+        config_gpu = config.get("cpu_or_gpu", "auto")
+        if config_gpu:
+            config_gpu = str(config_gpu).strip().lower()
+        print(f"[CONFIG] Found cpu_or_gpu setting: {config_gpu}")
+    except Exception as e:
+        print(f"[CONFIG] Could not read config: {e}")
 
     total_steps = 7
     step = 1
@@ -344,7 +356,47 @@ def setup_pyla():
     if target == "nvidia":
         setup_name = "NVIDIA DirectML"
 
-        if os.environ.get("PYLAAI_SETUP_AUTO", "").strip().lower() in ("1", "true", "yes"):
+        if config_gpu == "directml":
+            setup_name = "DirectML (Config)"
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
+        elif config_gpu == "cuda":
+            if ver >= 10.0:
+                torch_cmd = [
+                    "--pre",
+                    "torch",
+                    "torchvision",
+                    "--index-url",
+                    "https://download.pytorch.org/whl/nightly/cu128"
+                ]
+                setup_name = "CUDA 12.8 Blackwell"
+            elif ver >= 8.9:
+                torch_cmd = [
+                    "torch",
+                    "torchvision",
+                    "--index-url",
+                    "https://download.pytorch.org/whl/cu124"
+                ]
+                setup_name = "CUDA 12.4 Ada"
+            else:
+                torch_cmd = [
+                    "torch",
+                    "torchvision",
+                    "--index-url",
+                    "https://download.pytorch.org/whl/cu121"
+                ]
+                setup_name = "CUDA 12.1 Standard"
+
+            force_install(
+                torch_cmd,
+                task_name="PyTorch CUDA",
+                step=step,
+                total=total_steps,
+                gpu=name,
+                setup_name=setup_name
+            )
+
+            install_onnxruntime_variant("onnxruntime-gpu", step, total_steps, name, setup_name)
+        elif os.environ.get("PYLAAI_SETUP_AUTO", "").strip().lower() in ("1", "true", "yes"):
             install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
 
         elif ask_user("Install NVIDIA CUDA acceleration?"):
@@ -396,7 +448,13 @@ def setup_pyla():
     elif target == "intel":
         setup_name = "Intel GPU"
 
-        if ask_user("Install DirectML GPU acceleration?"):
+        if config_gpu == "directml":
+            setup_name = "Intel DirectML (Config)"
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
+        elif config_gpu == "openvino":
+            setup_name = "Intel OpenVINO (Config)"
+            install_onnxruntime_variant("onnxruntime-openvino", step, total_steps, name, setup_name)
+        elif ask_user("Install DirectML GPU acceleration?"):
             setup_name = "Intel DirectML"
             install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
 
@@ -411,7 +469,10 @@ def setup_pyla():
     elif "amd" in target:
         setup_name = "AMD GPU"
 
-        if ask_user("Install AMD DirectML acceleration?"):
+        if config_gpu == "directml":
+            setup_name = "AMD DirectML (Config)"
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
+        elif ask_user("Install AMD DirectML acceleration?"):
             setup_name = "AMD DirectML"
             install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
 
@@ -420,7 +481,10 @@ def setup_pyla():
             install_onnxruntime_variant("onnxruntime", step, total_steps, name, setup_name)
 
     else:
-        if ask_user("Install DirectML GPU acceleration?"):
+        if config_gpu == "directml":
+            setup_name = "DirectML (Config)"
+            install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
+        elif ask_user("Install DirectML GPU acceleration?"):
             setup_name = "DirectML"
             install_onnxruntime_variant("onnxruntime-directml", step, total_steps, name, setup_name)
 

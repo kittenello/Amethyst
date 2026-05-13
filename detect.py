@@ -35,6 +35,15 @@ def get_optimal_threads(max_limit=4):
 
 
 _provider_message_printed = False
+# Cache thread count at module level (same as pylaai approach) to avoid re-reading config repeatedly
+_optimal_threads_amount = None
+
+
+def _get_cached_optimal_threads():
+    global _optimal_threads_amount
+    if _optimal_threads_amount is None:
+        _optimal_threads_amount = get_optimal_threads()
+    return _optimal_threads_amount
 
 
 def _directml_provider():
@@ -209,15 +218,17 @@ class Detect:
     def load_model(self):
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
         providers = _build_providers(self.preferred_device)
         first_provider = _provider_name(providers[0])
         _configure_session_options_for_provider(so, first_provider)
-        optimal_threads_amount = get_optimal_threads()
+        optimal_threads_amount = _get_cached_optimal_threads()
         if first_provider == "CPUExecutionProvider":
+            # Disable spinning only on CPU to reduce idle CPU usage
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
             so.intra_op_num_threads = optimal_threads_amount
             so.inter_op_num_threads = max(1, min(2, optimal_threads_amount))
         else:
+            # For GPU providers (CUDA/DirectML): keep spinning enabled for lowest latency
             so.intra_op_num_threads = 1
             so.inter_op_num_threads = 1
         model = ort.InferenceSession(self.model_path, sess_options=so, providers=providers)

@@ -887,7 +887,7 @@ def pyla_main(data):
                 if frame_id == self.last_processed_frame_id:
                     self.perf_duplicate_waits += 1
                     self.recover_slow_feed()
-                    time.sleep(0.01)
+                    time.sleep(0.002)  # 2ms instead of 10ms — faster reaction to new frames
                     continue
                 self.last_processed_frame_id = frame_id
 
@@ -903,7 +903,7 @@ def pyla_main(data):
 
                 if self.state != "match":
                     self.window_controller.keys_up(list("wasd"))
-                    time.sleep(0.02)
+                    time.sleep(0.01)  # 10ms instead of 20ms in lobby — faster state detection
                     continue
 
                 if self.state == "match" and time.time() < self.match_ready_at:
