@@ -17,6 +17,7 @@ visual_freeze_diff_threshold = 0.35
 starr_nova_info_check_interval = 2.0
 lobby_start_retry = 8
 lobby_stuck_restart = 120
+match_result_watchdog = 120
 low_ips_recovery_threshold = 4.0
 low_ips_startup_grace_seconds = 60
 low_ips_match_grace_seconds = 12

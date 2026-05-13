@@ -115,19 +115,14 @@ def pyla_main(data):
                 first_brawler = first_row.get('brawler')
                 print(f"Picking brawler automatically before first match: {first_brawler}")
                 selection_method = first_row.get('selection_method', 'named_brawler')
-                selected = False
                 try:
                     if selection_method == 'lowest_trophies':
                         selected = self.lobby_automator.select_lowest_trophy_brawler()
                         if not selected and first_brawler:
                             print("Lowest-trophy quick select failed, falling back to named brawler selection.")
                             self.lobby_automator.select_brawler(first_brawler)
-                            selected = True
                     elif first_brawler:
                         self.lobby_automator.select_brawler(first_brawler)
-                        selected = True
-                    if selected:
-                        self.Stage_manager.mark_current_queue_entry_selected()
                 except Exception as e:
                     print(f"Initial auto-pick failed: {e}. The stage manager will retry from lobby.")
             self.Play.current_brawler = first_row.get('brawler', 'none')
@@ -189,6 +184,12 @@ def pyla_main(data):
             self.post_match_reward_window_seconds = float(
                 time_thresholds.get("post_match_reward_window_seconds", 120.0)
             )
+            self.match_result_watchdog_seconds = float(
+                time_thresholds.get("match_result_watchdog", 120.0)
+            )
+            self.match_result_entered_at = None
+            self.match_result_last_state = None
+            self.match_result_watchdog_last_notice = 0.0
             self.lobby_entered_at = None
             self.last_lobby_start_press = 0.0
             self.last_stale_feed_recovery = 0.0
@@ -296,6 +297,9 @@ def pyla_main(data):
             gc.collect()
             self.lobby_entered_at = None
             self.last_lobby_start_press = 0.0
+            self.match_result_entered_at = None
+            self.match_result_last_state = None
+            self.match_result_watchdog_last_notice = 0.0
             self.last_processed_frame_id = -1
             self.Play.time_since_detections["player"] = time.time()
             self.Play.time_since_detections["enemy"] = time.time()
@@ -592,6 +596,45 @@ def pyla_main(data):
             self.restart_brawl_stars()
             return True
 
+        def handle_match_result_watchdog(self, state):
+            now = time.time()
+            if state not in MATCH_RESULT_STATES or self.in_cooldown:
+                self.match_result_entered_at = None
+                self.match_result_last_state = None
+                self.match_result_watchdog_last_notice = 0.0
+                return False
+
+            if self.match_result_entered_at is None:
+                self.match_result_entered_at = now
+                self.match_result_last_state = state
+                self.match_result_watchdog_last_notice = 0.0
+                return False
+
+            if state != self.match_result_last_state:
+                print(
+                    "Match result watchdog: result state changed "
+                    f"from {self.match_result_last_state} to {state}; keeping the same timer."
+                )
+                self.match_result_last_state = state
+
+            result_age = now - self.match_result_entered_at
+            if result_age < self.match_result_watchdog_seconds:
+                if now - self.match_result_watchdog_last_notice >= 30.0:
+                    print(
+                        "Match result watchdog: still on "
+                        f"{state} for {result_age:.1f}/{self.match_result_watchdog_seconds:.1f}s."
+                    )
+                    self.match_result_watchdog_last_notice = now
+                return False
+
+            print(
+                "Match result screen did not clear for "
+                f"{result_age:.1f}s; restarting Brawl Stars."
+            )
+            self.window_controller.keys_up(list("wasd"))
+            self.restart_brawl_stars()
+            return True
+
         def apply_state_context_guard(self, detected_state, previous_state):
             now = time.time()
             if detected_state in MATCH_RESULT_STATES:
@@ -673,6 +716,8 @@ def pyla_main(data):
                 elif previous_state != "match" and state == "match":
                     self.Play.reset_match_control_state()
                     self.match_ready_at = time.time() + self.match_warmup_seconds
+                if self.handle_match_result_watchdog(state):
+                    return
                 frame_data = None
                 self.Stage_manager.do_state(state, frame_data)
                 if state == "lobby":
