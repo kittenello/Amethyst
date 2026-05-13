@@ -6,7 +6,6 @@ let historySort = "matches";
 let playerTrophies = {};
 let playerPowers = {};
 let playerName = "Player";
-let botRunning = false;
 let multiState = { devices: [], instances: [] };
 let selectedMultiLogId = null;
 let selectedMultiPort = Number(localStorage.getItem('amethyst.multi.selectedPort') || 0) || null;
@@ -69,11 +68,24 @@ async function api(path, options = {}) {
 async function init() {
   state = await api("/api/state");
   console.log("[WEBAPP][STATE]", state);
+  
   selectedPlaystyle = state.currentPlaystyle || "";
+  botRunning = state.runtime?.running || false;
+  
+  console.log("[WEBAPP] Initial botRunning state:", botRunning);
+  
   renderAll();
   if (state.playerTag) {
     loadPlayerData(true).catch(err => console.warn("[WEBAPP][PLAYER] Auto-load failed:", err));
   }
+  
+  // Update button state
+  updateStartState(false);
+  
+  // Refresh state after 1 second to ensure it's correct
+  setTimeout(async () => {
+    await refreshRuntime();
+  }, 1000);
 }
 
 function nameOf(id) {
@@ -221,8 +233,19 @@ function renderAll() {
 }
 
 function switchView(view) {
-  document.querySelectorAll(".view").forEach(el => el.classList.toggle("active", el.id === view));
+  // Hide all views with animation
+  document.querySelectorAll(".view.active").forEach(el => {
+    el.classList.remove("active");
+  });
+  
+  // Show new view with animation
+  setTimeout(() => {
+    document.getElementById(view).classList.add("active");
+  }, 50);
+  
+  // Update navigation
   document.querySelectorAll(".nav").forEach(el => el.classList.toggle("active", el.dataset.view === view));
+
   const titles = {
     dashboard: "Dashboard",
     multi: "Multi-Instance", 
@@ -588,33 +611,97 @@ function renderQueue() {
   });
 }
 
-function updateStartState(updatePanel = true) {
+async function updateStartState(updatePanel = true) {
   const ready = state.queue.length > 0 && selectedPlaystyle;
-  $("startBtn").disabled = !ready && !botRunning;
-  $("startBtn").querySelector("span").textContent = botRunning ? "STOP" : "START";
-  $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler and a playstyle before starting.";
-  if (updatePanel) renderRuntimePanel();
+  
+  try {
+    // Always get fresh state from server
+    const freshState = await api("/api/state");
+    const isRunning = freshState.runtime?.running || false;
+    
+    console.log("[WEBAPP] Direct server state check:", isRunning);
+    
+    // Update local botRunning to match server
+    botRunning = isRunning;
+    
+    // Update button based on server state
+    $("startBtn").disabled = !ready && !isRunning;
+    $("startBtn").querySelector("span").textContent = isRunning ? "STOP" : "START";
+    $("startHint").textContent = isRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler and a playstyle before starting.";
+    
+    if (updatePanel) renderRuntimePanel();
+  } catch (e) {
+    console.error("[WEBAPP] Failed to get server state for button:", e);
+    // Fallback to local state
+    $("startBtn").disabled = !ready && !botRunning;
+    $("startBtn").querySelector("span").textContent = botRunning ? "STOP" : "START";
+    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler and a playstyle before starting.";
+    
+    if (updatePanel) renderRuntimePanel();
+  }
 }
 
 async function startBot() {
-  if (botRunning) {
-    await api("/api/stop", { method: "POST", body: "{}" });
-    botRunning = false;
-    await refreshRuntime();
-    return;
+  try {
+    // Always get current state from server
+    const currentState = await api("/api/state");
+    const isRunning = currentState.runtime?.running || false;
+    
+    if (isRunning) {
+      // Stop the bot - immediately update UI
+      $("startBtn").disabled = true;
+      $("startBtn").querySelector("span").textContent = "STOPPING";
+      await api("/api/stop", { method: "POST", body: "{}" });
+      console.log("[WEBAPP] Bot stopped");
+      botRunning = false;
+      $("startBtn").disabled = false;
+      $("startBtn").querySelector("span").textContent = "START";
+      $("startHint").textContent = "Queue is ready. Start PylaAI from here.";
+    } else {
+      // Start the bot
+      $("startBtn").disabled = true;
+      $("startBtn").querySelector("span").textContent = "STARTING";
+      
+      await api("/api/start", { method: "POST", body: JSON.stringify({ queue: state.queue, playstyle: selectedPlaystyle }) });
+      console.log("[WEBAPP] Bot start command sent");
+      botRunning = true;
+      $("startBtn").disabled = false;
+      $("startBtn").querySelector("span").textContent = "STOP";
+      $("startHint").textContent = "Bot is running. Stop it from here when needed.";
+    }
+    
+    // Sync with server after a delay
+    setTimeout(() => updateStartState(false), 2000);
+    
+  } catch (e) {
+    console.error("[WEBAPP] Error in startBot:", e);
+    // Reset button state on error
+    $("startBtn").disabled = false;
+    $("startBtn").querySelector("span").textContent = "START";
   }
-  $("startBtn").disabled = true;
-  $("startBtn").querySelector("span").textContent = "STARTING";
-  await api("/api/start", { method: "POST", body: JSON.stringify({ queue: state.queue, playstyle: selectedPlaystyle }) });
-  botRunning = true;
-  await refreshRuntime();
 }
 
 async function refreshRuntime() {
-  const fresh = await api("/api/state");
-  state.runtime = fresh.runtime;
-  renderRuntimePanel();
-  updateStartState(false);
+  try {
+    const fresh = await api("/api/state");
+    state.runtime = fresh.runtime;
+    
+    // Update botRunning state from server
+    const newBotRunning = fresh.runtime?.running || false;
+    if (botRunning !== newBotRunning) {
+      console.log(`[WEBAPP] botRunning state changed: ${botRunning} -> ${newBotRunning}`);
+    }
+    botRunning = newBotRunning;
+    
+    renderRuntimePanel();
+    // Update button to match server state
+    const ready = state.queue.length > 0 && selectedPlaystyle;
+    $("startBtn").disabled = !ready && !botRunning;
+    $("startBtn").querySelector("span").textContent = botRunning ? "STOP" : "START";
+    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler and a playstyle before starting.";
+  } catch (e) {
+    console.error("[WEBAPP] Error in refreshRuntime:", e);
+  }
 }
 
 async function importPlaystyleFile(file) {
@@ -878,11 +965,75 @@ $("brawlersMultiMode")?.addEventListener("change", async ev => {
   renderBrawlerInstanceTabs();
 });
 init().catch(err => alert(err.message));
+// Adaptive polling based on page visibility and memory usage
+let pollingInterval = 3000;
+let lastPollTime = 0;
+
+function adaptivePoll() {
+  const now = Date.now();
+  // Reduce polling when tab is not visible
+  const currentInterval = document.visibilityState === "visible" ? pollingInterval : pollingInterval * 3;
+  
+  if (now - lastPollTime >= currentInterval) {
+    lastPollTime = now;
+    if (document.visibilityState === "visible" && state) {
+      refreshRuntime().catch(() => {});
+    }
+  }
+}
+
+// Use requestAnimationFrame for better performance
+function pollLoop() {
+  adaptivePoll();
+  requestAnimationFrame(pollLoop);
+}
+
+// Start polling with optimization
 setInterval(() => {
   if (document.visibilityState === "visible" && state) {
     refreshRuntime().catch(() => {});
   }
 }, 3000);
+
+// Memory cleanup every 5 minutes
+setInterval(() => {
+  // Clean up old history data if it gets too large
+  if (state.history && state.history.length > 1000) {
+    state.history = state.history.slice(-500);
+    console.log("[WEBAPP] Cleaned up old history data for memory optimization");
+  }
+}, 5 * 60 * 1000);
+
+// Handle page visibility changes for memory optimization
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    // Tab is hidden, reduce memory usage
+    console.log("[WEBAPP] Tab hidden, reducing memory usage");
+    // Clear some cached data that can be rebuilt
+    if (typeof state !== 'undefined') {
+      state.cachedFrames = [];
+      state.cachedData = null;
+    }
+  } else if (document.visibilityState === 'visible') {
+    // Tab is visible again, refresh state
+    console.log("[WEBAPP] Tab visible, refreshing state");
+    refreshRuntime().catch(() => {});
+  }
+});
+
+// Handle page unload to save state
+window.addEventListener('beforeunload', () => {
+  try {
+    localStorage.setItem('amergency.lastState', JSON.stringify({
+      timestamp: Date.now(),
+      botRunning: botRunning,
+      selectedPlaystyle: selectedPlaystyle,
+      queue: state?.queue || []
+    }));
+  } catch (e) {
+    // Silently fail on unload
+  }
+});
 
 
 async function refreshMulti() {

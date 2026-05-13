@@ -773,9 +773,12 @@ class WebApp:
             current_brawler = runtime.get("currentBrawler")
         except Exception:
             runtime = {}
+        stop_flag = (ROOT / "logs" / "web_stop_requested.flag").exists()
+        found_state_file = False
         for path in (ROOT / "logs").glob("runtime_control_*.state"):
             try:
                 control_state = path.read_text(encoding="utf-8", errors="ignore").strip()
+                found_state_file = True
                 if control_state == "stopped":
                     state = "idle"
                     break
@@ -784,9 +787,14 @@ class WebApp:
                     break
             except OSError:
                 pass
+        # If no state files yet but ready event is set (bot starting up), treat as running
+        if not found_state_file and not stop_flag and self.ready.is_set():
+            if state == "idle":
+                state = "running"
         current = queue[0] if queue else {}
         return {
             "state": state,
+            "running": state not in ("idle", "stopped", ""),
             "session": current.get("brawler", "none"),
             "currentBrawler": current_brawler or current.get("brawler", "none"),
             "progressCurrent": int(current.get(current.get("type", "trophies"), 0) or 0) if current else 0,
@@ -1055,8 +1063,7 @@ class WebApp:
                 "player": getattr(play_instance, '_last_player_data', []),
                 "enemy": getattr(play_instance, '_last_enemy_data', []), 
                 "teammate": getattr(play_instance, '_last_teammate_data', []),
-                "wall": getattr(play_instance, '_last_wall_data', []),
-                "water": getattr(play_instance, '_last_water_data', [])
+                "wall": getattr(play_instance, '_last_wall_data', [])
             }
             
             # Create ESP debug image
@@ -1082,7 +1089,7 @@ class WebApp:
             if not image_bytes:
                 raise ValueError("Failed to process ESP debug image")
             
-            text = f"🔍 <b>ESP Debug View</b>\n\n<b>Brawler:</b> {getattr(play_instance, 'current_brawler', 'Unknown')}\n<b>State:</b> Debug screenshot with ESP visualization\n\n🟢 Player | 🔴 Enemy | 🔵 Teammate | ⬜ Walls | 🔷 Water"
+            text = f"🔍 <b>ESP Debug View</b>\n\n<b>Brawler:</b> {getattr(play_instance, 'current_brawler', 'Unknown')}\n<b>State:</b> Debug screenshot with ESP visualization\n\n🟢 Player | 🔴 Enemy | 🔵 Teammate | ⬜ Walls"
             
             async def send_direct():
                 async with aiohttp.ClientSession() as session:
