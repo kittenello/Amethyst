@@ -40,7 +40,7 @@ from utils import (
 )
 from webapp import WebApp
 from window_controller import WindowController
-from starr_drop_integration import StarrDropIntegration
+from starr_drop import StarrDropIntegration
 
 if platform.architecture()[0] != "64bit":
     print("\nWARNING: Amethyst is running on 32-bit Python.")

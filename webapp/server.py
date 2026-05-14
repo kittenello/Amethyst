@@ -982,7 +982,7 @@ class WebApp:
         # Reload starr_drop_detect at runtime if the flag changed
         if section == "general" and key == "starr_drop_detect":
             try:
-                from starr_drop_integration import StarrDropIntegration  # noqa
+                from starr_drop import StarrDropIntegration  # noqa
                 # Find any live integration instance and reload it
                 import gc as _gc
                 for obj in _gc.get_objects():
