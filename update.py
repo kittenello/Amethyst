@@ -47,7 +47,7 @@ def enable_ansi():
 def cp(text="", color=RESET):
     try:
         width = os.get_terminal_size().columns
-    except:
+    except Exception:
         width = 120
 
     print(color + text.center(width) + RESET)
@@ -89,15 +89,14 @@ def download_with_progress(url, output_path):
         headers={"User-Agent": "Mozilla/5.0"}
     )
 
-    with urllib.request.urlopen(req) as response:
+    with urllib.request.urlopen(req, timeout=30) as response:
         total_size = int(response.headers.get("Content-Length", 0))
 
         downloaded = 0
         chunk_size = 8192
+        i = 0
 
         with open(output_path, "wb") as f:
-            i = 0
-
             while True:
                 chunk = response.read(chunk_size)
 
@@ -106,20 +105,32 @@ def download_with_progress(url, output_path):
 
                 f.write(chunk)
                 downloaded += len(chunk)
-
-                percent = int(downloaded * 100 / total_size) if total_size else 0
-
-                draw_ui(
-                    status="Downloading update...",
-                    task="GitHub repository",
-                    percent=percent,
-                    spin=SPINNER[i % len(SPINNER)]
-                )
-
                 i += 1
 
+                if i % 16 == 0 or downloaded == total_size:
+                    if total_size:
+                        percent = int(downloaded * 100 / total_size)
+                    else:
+                        percent = min(95, int((downloaded / (1024 * 1024 * 5)) * 95))
 
-def download_and_update():
+                    draw_ui(
+                        status="Downloading update...",
+                        task=f"GitHub repository ({downloaded // 1024} KB)",
+                        percent=percent,
+                        spin=SPINNER[(i // 16) % len(SPINNER)]
+                    )
+
+        draw_ui(
+            status="Download complete!",
+            task=f"GitHub repository ({downloaded // 1024} KB)",
+            percent=100,
+            spin="✓"
+        )
+
+
+def download_and_update(overwrite_protected=False):
+    errors = []
+
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             zip_path = os.path.join(tmp_dir, "update.zip")
@@ -179,7 +190,7 @@ def download_and_update():
                 )
 
                 if not os.path.exists(dest_dir):
-                    os.makedirs(dest_dir)
+                    os.makedirs(dest_dir, exist_ok=True)
 
                 src_file = os.path.join(src_dir, file)
                 dest_file = os.path.join(dest_dir, file)
@@ -199,15 +210,16 @@ def download_and_update():
                 )
 
                 if (
-                    rel_file_path in PROTECTED_FILES
+                    not overwrite_protected
+                    and rel_file_path in PROTECTED_FILES
                     and os.path.exists(dest_file)
                 ):
                     continue
 
                 try:
                     shutil.copy2(src_file, dest_file)
-                except:
-                    pass
+                except Exception as e:
+                    errors.append(f"{rel_file_path}: {e}")
 
             draw_ui(
                 status="Update completed!",
@@ -218,6 +230,13 @@ def download_and_update():
 
             print()
             cp("UPDATE INSTALLED SUCCESSFULLY!", WHITE)
+
+            if errors:
+                print()
+                cp(f"Warning: {len(errors)} file(s) could not be copied:", GRAY)
+                for err in errors[:5]:
+                    cp(f"  - {err}", GRAY)
+
             print()
 
             return True
@@ -228,10 +247,54 @@ def download_and_update():
         return False
 
 
+def ask_overwrite_protected():
+    clear()
+
+    for line in art.splitlines():
+        cp(line, PURPLE)
+
+    print()
+    cp("+------------------------------------------------------------+", PURPLE)
+    cp("|           PROTECTED FILES DETECTED                        |", PURPLE)
+    cp("+------------------------------------------------------------+", PURPLE)
+    print()
+    cp("The following config files already exist on your machine:", WHITE)
+    print()
+
+    try:
+        width = os.get_terminal_size().columns
+    except Exception:
+        width = 120
+
+    for f in PROTECTED_FILES:
+        print(GRAY + f"    {f}".center(width) + RESET)
+
+    print()
+    cp("+------------------------------------------------------------+", PURPLE)
+    cp("|  Download protected files?                                |", PURPLE)
+    cp("|  WARNING: you may lose your current settings!             |", PURPLE)
+    cp("+------------------------------------------------------------+", PURPLE)
+    print()
+
+    while True:
+        try:
+            width = os.get_terminal_size().columns
+        except Exception:
+            width = 120
+        print(WHITE + "  [y] Download  /  [n] Keep my settings".center(width) + RESET)
+        print()
+        answer = input("  > ").strip().lower()
+        if answer in ("y", "n"):
+            return answer == "y"
+        cp("Please enter y or n.", GRAY)
+
+
 if __name__ == "__main__":
     enable_ansi()
 
-    if download_and_update():
+    overwrite_protected = ask_overwrite_protected()
+
+    if download_and_update(overwrite_protected):
         print()
         cp("You can now start the bot.", WHITE)
     else:
