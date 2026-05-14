@@ -33,3 +33,7 @@ mumu_manager_path = ""
 ldplayer_console_path = ""
 api_base_url = "default"
 brawl_stars_package = "com.supercell.brawlstars"
+starr_drop_detect = true
+starr_drop_threshold = 0.6
+starr_drop_post_tap_delay = 7
+starr_drop_post_hold_delay = 10

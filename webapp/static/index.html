@@ -140,6 +140,50 @@
     </div>
   </div>
 
+  <div id="starrDropModal" class="modal-backdrop" hidden>
+    <div class="modal-card sd-modal-card">
+      <button class="modal-close" onclick="closeStarrDropModal()" aria-label="Close">×</button>
+      <div class="eyebrow">STARR DROP DETECT</div>
+      <h2>Detection settings</h2>
+
+      <div class="sd-field">
+        <label class="sd-label">
+          Threshold
+          <span class="sd-hint">Minimal confidence to trigger</span>
+        </label>
+        <div class="sd-input-row">
+          <input id="sdThreshold" class="input sd-input" type="number" min="0" max="1" step="0.01" value="0.80">
+          <span class="sd-unit" id="sdThresholdPct">80%</span>
+        </div>
+      </div>
+
+      <div class="sd-field">
+        <label class="sd-label">
+          Delay after taps
+          <span class="sd-hint">Seconds to wait after pressing 5 taps before the final tap</span>
+        </label>
+        <div class="sd-input-row">
+          <input id="sdPostTapDelay" class="input sd-input" type="number" min="0" step="0.5" value="7.0">
+          <span class="sd-unit">sec</span>
+        </div>
+      </div>
+
+      <div class="sd-field">
+        <label class="sd-label">
+          Delay after hold
+          <span class="sd-hint">Seconds to wait after holding Q: demonic, angelic, starr nova starr drops, before the final tap</span>
+        </label>
+        <div class="sd-input-row">
+          <input id="sdPostHoldDelay" class="input sd-input" type="number" min="0" step="0.5" value="7.0">
+          <span class="sd-unit">sec</span>
+        </div>
+      </div>
+
+      <p id="sdStatus" class="tiny-status"></p>
+      <button class="primary" onclick="saveStarrDropSettings()">Save settings</button>
+    </div>
+  </div>
+
   <script src="/app.js?v=20260511_selected_ldplayer_start"></script>
 </body>
 </html>

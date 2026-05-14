@@ -430,3 +430,59 @@ label { display: block; color: var(--muted); font-weight: 900; font-size: 12px; 
   width: fit-content;
   padding: 10px 14px;
 }
+
+/* ── Starr Drop three-dot button ─────────────────────────── */
+.sd-dots-btn {
+  width: 30px; height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #171022;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.sd-dots-btn:hover {
+  border-color: var(--red);
+  color: white;
+  background: #251538;
+}
+
+/* ── Starr Drop modal card ────────────────────────────────── */
+.sd-modal-card { width: min(440px, 100%); }
+.sd-field { margin-top: 20px; }
+.sd-label {
+  display: block;
+  font-weight: 800;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.sd-hint {
+  display: block;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.sd-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sd-input {
+  flex: 1;
+  height: 42px;
+}
+.sd-unit {
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 32px;
+  text-align: right;
+}
+#sdStatus { margin-top: 14px; margin-bottom: 0; }
+.sd-modal-card .primary { margin-top: 20px; }

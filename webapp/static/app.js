@@ -513,8 +513,65 @@ function renderSettings() {
     ["bot", "Detection", state.settings.bot],
     ["timers", "Timers", pick(state.settings.timers, ["super", "hypercharge", "gadget", "wall_detection", "no_detection_proceed"])]
   ];
-  $("settingsGrid").innerHTML = groups.map(([section, title, data]) => `<div class="setting-group"><div class="eyebrow">${title.toUpperCase()}</div>${Object.entries(data).map(([key, value]) => settingRow(section, key, value)).join("")}</div>`).join("");
+  $("settingsGrid").innerHTML = groups.map(([section, title, data]) => {
+    const rows = Object.entries(data).map(([key, value]) => {
+      if (section === "general" && key === "starr_drop_detect") {
+        return starrDropDetectRow(value);
+      }
+      return settingRow(section, key, value);
+    }).join("");
+    return `<div class="setting-group"><div class="eyebrow">${title.toUpperCase()}</div>${rows}</div>`;
+  }).join("");
   document.querySelectorAll("#settingsGrid [data-setting]").forEach(input => input.onchange = saveSetting);
+}
+
+function starrDropDetectRow(value) {
+  return `<div class="setting">
+    <div><b>Starr Drop Detect</b><p>Auto-save</p></div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;">
+      <button class="sd-dots-btn" onclick="openStarrDropSettings()" title="Configure Starr Drop settings">&#8942;</button>
+      <input data-setting="general:starr_drop_detect" type="checkbox" ${value ? "checked" : ""}>
+    </div>
+  </div>`;
+}
+
+function openStarrDropSettings() {
+  const sd = state.settings.starr_drop || {};
+  $("sdThreshold").value = sd.starr_drop_threshold ?? 0.80;
+  $("sdPostTapDelay").value = sd.starr_drop_post_tap_delay ?? 7.0;
+  $("sdPostHoldDelay").value = sd.starr_drop_post_hold_delay ?? 7.0;
+  $("sdStatus").textContent = "";
+  $("starrDropModal").hidden = false;
+  $("starrDropModal").removeAttribute("hidden");
+  $("starrDropModal").style.display = "grid";
+}
+
+function closeStarrDropModal() {
+  const modal = $("starrDropModal");
+  modal.hidden = true;
+  modal.setAttribute("hidden", "");
+  modal.style.display = "none";
+}
+
+async function saveStarrDropSettings() {
+  const threshold = parseFloat($("sdThreshold").value);
+  const postTap   = parseFloat($("sdPostTapDelay").value);
+  const postHold  = parseFloat($("sdPostHoldDelay").value);
+  if ([threshold, postTap, postHold].some(isNaN)) {
+    $("sdStatus").textContent = "Invalid values.";
+    return;
+  }
+  $("sdStatus").textContent = "Saving…";
+  try {
+    await api("/api/settings", { method: "POST", body: JSON.stringify({ section: "starr_drop", key: "starr_drop_threshold", value: threshold }) });
+    await api("/api/settings", { method: "POST", body: JSON.stringify({ section: "starr_drop", key: "starr_drop_post_tap_delay", value: postTap }) });
+    const res = await api("/api/settings", { method: "POST", body: JSON.stringify({ section: "starr_drop", key: "starr_drop_post_hold_delay", value: postHold }) });
+    if (res?.settings?.starr_drop) state.settings.starr_drop = res.settings.starr_drop;
+    $("sdStatus").textContent = "Saved!";
+    setTimeout(() => { $("sdStatus").textContent = ""; closeStarrDropModal(); }, 800);
+  } catch (e) {
+    $("sdStatus").textContent = "Error saving.";
+  }
 }
 
 function renderLogging() {
@@ -905,6 +962,18 @@ function bindPushAllUi() {
   if (closeBtn) closeBtn.onclick = closePushAllModal;
   const modal = $("pushAllModal");
   if (modal) modal.onclick = ev => { if (ev.target.id === "pushAllModal") closePushAllModal(); };
+
+  // StarrDrop modal — backdrop click closes, threshold shows live %
+  const sdModal = $("starrDropModal");
+  if (sdModal) sdModal.onclick = ev => { if (ev.target.id === "starrDropModal") closeStarrDropModal(); };
+  const sdThreshInput = $("sdThreshold");
+  const sdPct = $("sdThresholdPct");
+  if (sdThreshInput && sdPct) {
+    sdThreshInput.oninput = () => {
+      const v = parseFloat(sdThreshInput.value);
+      sdPct.textContent = isNaN(v) ? "—" : Math.round(v * 100) + "%";
+    };
+  }
   document.querySelectorAll("[data-push-target]").forEach(btn => {
     btn.onclick = () => {
       if ($("pushAllTarget")) $("pushAllTarget").value = btn.dataset.pushTarget;

@@ -832,6 +832,12 @@ class WebApp:
                 "emulator_port": general_config.get("emulator_port", 5555),
                 "brawl_stars_package": general_config.get("brawl_stars_package", "com.supercell.brawlstars"),
                 "super_debug": general_config.get("super_debug", "no"),
+                "starr_drop_detect": bool(general_config.get("starr_drop_detect", True)),
+            },
+            "starr_drop": {
+                "starr_drop_threshold": float(general_config.get("starr_drop_threshold", 0.80)),
+                "starr_drop_post_tap_delay": float(general_config.get("starr_drop_post_tap_delay", 7.0)),
+                "starr_drop_post_hold_delay": float(general_config.get("starr_drop_post_hold_delay", 7.0)),
             },
             "bot": {
                 "seconds_to_hold_attack_after_reaching_max": bot_config.get("seconds_to_hold_attack_after_reaching_max", 1.5),
@@ -963,6 +969,7 @@ class WebApp:
             "timers": ROOT / "cfg" / "time_tresholds.toml",
             "discord": ROOT / "cfg" / "discord_config.toml",
             "telegram": ROOT / "cfg" / "telegram_config.toml",
+            "starr_drop": ROOT / "cfg" / "general_config.toml",
         }
         section = payload.get("section")
         key = payload.get("key")
@@ -972,6 +979,18 @@ class WebApp:
         config = dict(load_toml_as_dict(path))
         config[str(key)] = payload.get("value")
         save_dict_as_toml(config, path)
+        # Reload starr_drop_detect at runtime if the flag changed
+        if section == "general" and key == "starr_drop_detect":
+            try:
+                from starr_drop_integration import StarrDropIntegration  # noqa
+                # Find any live integration instance and reload it
+                import gc as _gc
+                for obj in _gc.get_objects():
+                    if isinstance(obj, StarrDropIntegration):
+                        obj.reload_enabled()
+                        break
+            except Exception:
+                pass
         return {"ok": True, "settings": self.build_state()["settings"]}
 
     def update_player_tag(self, payload):

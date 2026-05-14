@@ -40,6 +40,7 @@ from utils import (
 )
 from webapp import WebApp
 from window_controller import WindowController
+from starr_drop_integration import StarrDropIntegration
 
 if platform.architecture()[0] != "64bit":
     print("\nWARNING: Amethyst is running on 32-bit Python.")
@@ -225,6 +226,10 @@ def pyla_main(data):
             self.control_window = RuntimeControlWindow()
             self.discord_control = DiscordControlServer(self.control_window.state_path)
             self.discord_control.start()
+            self.starr_drop = StarrDropIntegration(
+                window_controller=self.window_controller,
+            )
+            self.starr_drop.start()
             self.was_paused = False
             self.pause_started_at = None
             self.web_runtime_path = Path("logs") / "web_runtime.json"
@@ -708,6 +713,7 @@ def pyla_main(data):
                 previous_state = self.state
                 state = self.apply_state_context_guard(detected_state, previous_state)
                 self.state = state
+                self.starr_drop.notify_state(state)
                 if state != "match":
                     self.Play.time_since_last_proceeding = time.time()
                 if previous_state == "match" and state != "match":
@@ -986,6 +992,7 @@ def pyla_main(data):
                         time.sleep(target_period - work_time)
 
             self.discord_control.close()
+            self.starr_drop.stop()
             self.control_window.close()
 
     main = Main()

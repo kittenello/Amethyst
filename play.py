@@ -798,16 +798,7 @@ class Play(Movement):
         return closest_teammate, closest_distance
 
     def _build_trusted_fog_mask(self, frame, roi_center, roi_radius):
-        """Return (mask, (ox, oy)) or None.
 
-        Only processes an ROI of side 2*roi_radius+1 around roi_center —
-        we only care about fog that's close to the player.
-        Mask contains only fog pixels that belong to a large, morphologically
-        clean blob — not stray color noise. (ox, oy) is the ROI's top-left
-        offset in frame coordinates so callers can translate back.
-
-        Result is cached per-frame (keyed by id(frame) and ROI tuple).
-        """
         if frame is None:
             return None
 
@@ -853,20 +844,7 @@ class Play(Movement):
         return result
 
     def detect_fog_threat(self, frame, player_position):
-        """Check whether a real fog front is within self.fog_flee_distance of
-        the player. Returns the flee angle (away from local fog mass) if so,
-        else None.
 
-        Confidence pipeline:
-          1. HSV threshold → raw mask.
-          2. Morph open + size-filtered connected components → trusted mask.
-          3. Count trusted fog pixels inside a disk of radius fog_flee_distance
-             around the player. If count ≥ fog_min_pixels_in_radius, it's a
-             real incoming front — not a stray artifact.
-        The flee direction is the angle opposite to the centroid of the
-        trusted fog pixels *inside the radius*, so we run away from the
-        closest wall of fog, not from fog on the far side of the map.
-        """
         r = self.fog_flee_distance
         built = self._build_trusted_fog_mask(frame, roi_center=player_position, roi_radius=r)
         if built is None:
@@ -888,7 +866,6 @@ class Play(Movement):
         if count < self.fog_min_pixels_in_radius:
             return None
 
-        # Centroid of the nearby fog mass, then flee opposite direction
         cx = float(dx_all[inside].mean())
         cy = float(dy_all[inside].mean())
         if math.hypot(cx, cy) < 1:
@@ -899,12 +876,7 @@ class Play(Movement):
         return flee
 
     def detect_fog_direction_escape(self, frame, player_position):
-        """Return an escape angle if poison gas is touching a side of player.
 
-        This mirrors the official v0.8.3 playstyle idea: check up/down/left/right
-        close to the player and move in the opposite direction. It complements
-        the centroid-based fog detector, which can miss thin gas edges.
-        """
         r = int(max(self.fog_flee_distance, 120))
         built = self._build_trusted_fog_mask(frame, roi_center=player_position, roi_radius=r)
         if built is None:
@@ -922,29 +894,33 @@ class Play(Movement):
         band = max(35, int(r * 0.45))
         min_pixels = max(20, int(self.fog_min_pixels_in_radius * 0.55))
 
-        direction_counts = {
-            "up": int(((dy < 0) & (dy >= -r) & (np.abs(dx) <= band)).sum()),
-            "down": int(((dy > 0) & (dy <= r) & (np.abs(dx) <= band)).sum()),
-            "left": int(((dx < 0) & (dx >= -r) & (np.abs(dy) <= band)).sum()),
-            "right": int(((dx > 0) & (dx <= r) & (np.abs(dy) <= band)).sum()),
+        poison_gas = {
+            "up":    int(((dy < 0) & (dy >= -r) & (np.abs(dx) <= band)).sum()),
+            "down":  int(((dy > 0) & (dy <= r)  & (np.abs(dx) <= band)).sum()),
+            "left":  int(((dx < 0) & (dx >= -r) & (np.abs(dy) <= band)).sum()),
+            "right": int(((dx > 0) & (dx <= r)  & (np.abs(dy) <= band)).sum()),
         }
 
         escape_x = 0.0
         escape_y = 0.0
-        if direction_counts["up"] >= min_pixels and direction_counts["up"] > direction_counts["down"] + min_pixels:
-            escape_y += 1.0
-        if direction_counts["down"] >= min_pixels and direction_counts["down"] > direction_counts["up"] + min_pixels:
-            escape_y -= 1.0
-        if direction_counts["left"] >= min_pixels and direction_counts["left"] > direction_counts["right"] + min_pixels:
-            escape_x += 1.0
-        if direction_counts["right"] >= min_pixels and direction_counts["right"] > direction_counts["left"] + min_pixels:
-            escape_x -= 1.0
+
+        if poison_gas["up"] >= min_pixels or poison_gas["down"] >= min_pixels:
+            if poison_gas["up"] > poison_gas["down"]:
+                escape_y += 1.0
+            else:
+                escape_y -= 1.0
+
+        if poison_gas["left"] >= min_pixels or poison_gas["right"] >= min_pixels:
+            if poison_gas["left"] > poison_gas["right"]:
+                escape_x += 1.0
+            else:
+                escape_x -= 1.0
 
         if math.hypot(escape_x, escape_y) < 0.01:
             return None
 
         angle = self.angle_from_direction(escape_x, escape_y)
-        vlog(f"directional fog escape: counts={direction_counts} -> angle={angle:.1f} deg")
+        vlog(f"directional fog escape: counts={poison_gas} -> escape=({escape_x:.0f},{escape_y:.0f}) angle={angle:.1f} deg")
         return angle
 
     def is_there_poison_gas(self, direction, player_data):
@@ -986,12 +962,6 @@ class Play(Movement):
         return int(checks[direction].sum()) >= min_pixels
 
     def showdown_roam(self, player_data, walls):
-        """Idle roam movement that travels instead of spinning in place.
-
-        Close-fog avoidance is still handled by the uniform fog override in
-        get_showdown_movement, but this keeps ordinary no-enemy movement away
-        from walls and lightly biased toward screen center.
-        """
         now = time.time()
         player_pos = self.get_player_pos(player_data)
         current_blocked = self.is_path_blocked_angle(player_pos, self._roam_angle, walls)
