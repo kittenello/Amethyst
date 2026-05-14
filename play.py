@@ -942,7 +942,7 @@ class Play(Movement):
         dy = (ys + oy) - py
         band = max(30, int(r * 0.45))
         min_pixels = max(12, int(self.fog_min_pixels_in_radius * 0.45))
-        direction = str(direction).lower()
+        direction = str(direction).lower() #hi
         try:
             player_half_width = max(8, abs(float(player_data[2]) - float(player_data[0])) * 0.55)
             player_half_height = max(8, abs(float(player_data[3]) - float(player_data[1])) * 0.55)
