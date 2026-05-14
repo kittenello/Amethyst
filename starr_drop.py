@@ -19,7 +19,7 @@ MATCH_RESULT_STATES = {
     "end_4th",
 }
 
-SLEEP_STATES = {"match_making"}
+SLEEP_STATES = {"match_making", "match"}
 
 _TEMPLATE_SUBDIR = Path("images") / "star_drop_types"
 
@@ -331,11 +331,15 @@ class StarrDropIntegration:
             return
         if state in SLEEP_STATES:
             if self._sleep_evt.is_set():
-                print("end detect starr drops due to start match making")
+                print(f"starr drop: pausing detector — state: {state}")
             self._sleep_evt.clear()
+        elif state in MATCH_RESULT_STATES:
+            if not self._sleep_evt.is_set():
+                print(f"starr drop: resuming detector — match ended ({state})")
+            self._sleep_evt.set()
         else:
             if not self._sleep_evt.is_set():
-                print(f"start detect starr drops due to {state}")
+                print(f"starr drop: resuming detector — state: {state}")
             self._sleep_evt.set()
 
     def reload_enabled(self) -> None:
