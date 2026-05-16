@@ -1,6 +1,8 @@
 import asyncio
+import json
 import os
 import time
+import urllib.request
 
 import cv2
 import numpy as np
@@ -54,6 +56,9 @@ class StageManager:
         adaptive_window = int(bot_config.get("adaptive_brain_window", 20))
         self.adaptive_brain = AdaptiveBrain(enabled=adaptive_enabled, window_size=adaptive_window)
         print(self.adaptive_brain.summary())
+        self.post_match_action = str(bot_config.get("post_match_action", "lobby")).strip().lower()
+        if self.post_match_action not in ("lobby", "play_again"):
+            self.post_match_action = "lobby"
         self.time_since_last_stat_change = time.time()
         # Guards against recording trophies twice when end_game() is re-entered
         # on the same end-of-match screen (e.g. because the dismiss button
@@ -73,6 +78,7 @@ class StageManager:
         time_thresholds = load_toml_as_dict("./cfg/time_tresholds.toml")
         self.end_screen_dismiss_delay = float(time_thresholds.get("end_screen_dismiss_delay", 0.35))
         self.window_controller = window_controller
+        self.starr_drop = None
         self.states = {
             'shop': self.quit_shop,
             'brawler_selection': self.quit_shop,
@@ -145,6 +151,9 @@ class StageManager:
         self.farming_complete = True
         self.stop_after_post_match_rewards = False
         self.window_controller.keys_up(list("wasd"))
+        # Replace the lobby handler with a no-op so the lobby watchdog
+        # and any re-entry of do_state("lobby") cannot press Q and start a match.
+        self.states["lobby"] = lambda: self.window_controller.keys_up(list("wasd"))
         save_brawler_data(self.brawlers_pick_data)
         return 0
 
@@ -169,6 +178,80 @@ class StageManager:
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _queue_order(queue):
+        if not isinstance(queue, list):
+            return []
+        return [str(row.get("brawler", "")) for row in queue if isinstance(row, dict)]
+
+    @staticmethod
+    def _queue_api_url():
+        return os.environ.get("PYLA_QUEUE_API_URL", "http://127.0.0.1:8765/api/queue")
+
+    def _fetch_queue_from_webapp(self, timeout=0.75):
+        url = self._queue_api_url()
+        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        queue = payload.get("queue") if isinstance(payload, dict) else payload
+        return queue if isinstance(queue, list) and queue else None
+
+    def _apply_live_queue(self, queue, source, reason):
+        if not isinstance(queue, list) or not queue:
+            return False
+
+        old_order = self._queue_order(self.brawlers_pick_data)
+        new_order = self._queue_order(queue)
+        if not new_order or new_order == old_order:
+            return False
+
+        print(f"Queue reloaded from {source} before {reason}: {old_order[:8]} -> {new_order[:8]}")
+        self.brawlers_pick_data = queue
+        self.last_auto_selected_queue_key = None
+        self.push_all_needs_selection = True
+
+        self.started_trophies_by_brawler = {}
+        for row in self.brawlers_pick_data:
+            name = str(row.get("brawler", "")).lower()
+            if name:
+                self.started_trophies_by_brawler[name] = row.get("trophies", 0)
+
+        current = self.brawlers_pick_data[0]
+        self.Trophy_observer.change_trophies(self._number_or_default(current.get("trophies", 0), 0))
+        self.Trophy_observer.current_wins = self._number_or_default(current.get("wins", 0), 0)
+        self.Trophy_observer.win_streak = self._number_or_default(current.get("win_streak", 0), 0)
+        save_brawler_data(self.brawlers_pick_data)
+        return True
+
+    def reload_queue_from_webapp(self, reason="queue check"):
+        """Reload the canonical dashboard queue before choosing a brawler.
+
+        The browser exposes the current order at http://127.0.0.1:8765/api/queue.
+        This is more reliable than latest_brawler_data.json when the running bot
+        already has a stale queue in memory.
+        """
+        try:
+            webapp_queue = self._fetch_queue_from_webapp(timeout=0.75)
+        except Exception as e:
+            print(f"Could not reload queue from {self._queue_api_url()} ({reason}); falling back to latest_brawler_data.json. {e}")
+            return self.reload_queue_from_disk(reason)
+        return self._apply_live_queue(webapp_queue, "webapp /api/queue", reason)
+
+    def reload_queue_from_disk(self, reason="queue check"):
+        """Fallback reload from latest_brawler_data.json when the webapp endpoint is unavailable."""
+        queue_path = "latest_brawler_data.json"
+        if not os.path.exists(queue_path):
+            return False
+
+        try:
+            with open(queue_path, "r", encoding="utf-8") as f:
+                disk_queue = json.load(f)
+        except Exception as e:
+            print(f"Could not reload queue from latest_brawler_data.json ({reason}); keeping memory queue. {e}")
+            return False
+
+        return self._apply_live_queue(disk_queue, "latest_brawler_data.json", reason)
 
     def _current_queue_key(self):
         if not self.brawlers_pick_data:
@@ -208,6 +291,41 @@ class StageManager:
         self.window_controller.keys_up(list("wasd"))
         return False
 
+    def select_current_queue_brawler(self, action="Auto-pick", mark_selected=True):
+        """Select the exact brawler at the front of the queue.
+
+        `selection_method` controls how Push All builds/sorts the queue. Once the
+        first row is known, the in-game picker must search that named brawler.
+        Tapping the first card after sorting can choose a different brawler when
+        the Brawl Stars menu order does not match the saved queue.
+        """
+        if not self.brawlers_pick_data:
+            return True
+
+        row = self.brawlers_pick_data[0]
+        brawler_name = str(row.get("brawler", "")).strip()
+        selection_method = row.get("selection_method", "named_brawler")
+        print(f"{action}: selecting queued brawler: {brawler_name or '<legacy lowest trophies>'}")
+
+        try:
+            if not self.ensure_lobby_before_selection(action):
+                selected = False
+            elif brawler_name:
+                selected = self.Lobby_automation.select_brawler(brawler_name)
+            elif selection_method == "lowest_trophies":
+                # Legacy fallback for malformed/old queue rows that do not store
+                # a brawler name. Normal webapp/Push All rows always have one.
+                selected = self.Lobby_automation.select_lowest_trophy_brawler()
+            else:
+                selected = False
+        except Exception as e:
+            print(f"{action} failed with error: {e}")
+            selected = False
+
+        if selected and mark_selected:
+            self.mark_current_queue_entry_selected()
+        return selected
+
     def auto_select_current_brawler_if_needed(self):
         """Select the current queue brawler before starting a match when enabled.
 
@@ -227,37 +345,13 @@ class StageManager:
             return True
 
         brawler_name = row.get("brawler", "")
-        selection_method = row.get("selection_method", "named_brawler")
         print(f"Auto-pick enabled for current queue entry: {brawler_name}")
 
-        try:
-            if not self.ensure_lobby_before_selection("Auto-pick"):
-                selected = False
-            elif selection_method == "lowest_trophies":
-                selected = self.Lobby_automation.select_lowest_trophy_brawler()
-                if not selected and brawler_name:
-                    if not self.ensure_lobby_before_selection("Lowest-trophy named fallback"):
-                        selected = False
-                    else:
-                        print("Lowest-trophy selection failed, falling back to named brawler selection.")
-                        self.Lobby_automation.select_brawler(brawler_name)
-                        selected = True
-            else:
-                if brawler_name:
-                    self.Lobby_automation.select_brawler(brawler_name)
-                    selected = True
-                else:
-                    selected = False
-        except Exception as e:
-            print(f"Auto-pick failed with error: {e}")
-            selected = False
-
-        if not selected:
+        if not self.select_current_queue_brawler("Auto-pick"):
             print("Auto-pick failed; match start is delayed so the wrong brawler is not pushed.")
             self.window_controller.keys_up(list("wasd"))
             return False
 
-        self.mark_current_queue_entry_selected()
         return True
 
     def _prepare_next_push_all_brawler(self, target, type_of_push="trophies"):
@@ -443,6 +537,7 @@ class StageManager:
         if self.stop_after_post_match_rewards:
             return self.pause_farming_in_lobby("Post-match rewards cleared after completed target.")
         self.push_all_needs_selection = False
+        self.reload_queue_from_webapp("lobby auto-pick")
         self.refresh_push_all_trophies_from_api()
         if not self.brawlers_pick_data:
             return self.pause_farming_in_lobby("All Push All targets completed.")
@@ -512,31 +607,21 @@ class StageManager:
                 if attempts >= max_attempts:
                     print("Failed to reach lobby after max attempts")
                 else:
-                    selection_method = self.brawlers_pick_data[0].get("selection_method", "named_brawler")
-                    if selection_method == "lowest_trophies":
-                        selected = self.Lobby_automation.select_lowest_trophy_brawler()
-                    else:
-                        next_brawler_name = self.brawlers_pick_data[0]['brawler']
-                        self.Lobby_automation.select_brawler(next_brawler_name)
-                        selected = True
+                    selected = self.select_current_queue_brawler("Next queued brawler selection")
                     if not selected:
                         print("Could not confirm the next brawler selection reached lobby; delaying match start.")
                         self.window_controller.keys_up(list("wasd"))
                         return
-                    self.mark_current_queue_entry_selected()
             else:
                 print("Next brawler is in manual mode, waiting 10 seconds to let user switch.")
 
         elif self.push_all_needs_selection:
-            print("Push All queue changed from API; selecting the new lowest trophy brawler.")
-            if not self.ensure_lobby_before_selection("API-refreshed lowest-trophy selection"):
-                return 0
-            selected = self.Lobby_automation.select_lowest_trophy_brawler()
+            print("Push All queue changed from API; selecting the first queued brawler by name.")
+            selected = self.select_current_queue_brawler("API-refreshed queued brawler selection")
             if not selected:
                 print("Could not confirm the API-refreshed brawler selection reached lobby; delaying match start.")
                 self.window_controller.keys_up(list("wasd"))
                 return
-            self.mark_current_queue_entry_selected()
 
         if not self.auto_select_current_brawler_if_needed():
             return 0
@@ -664,11 +749,134 @@ class StageManager:
             self.window_controller.press_key("Q")
             return
 
-        if self.Lobby_automation.select_lowest_trophy_brawler():
-            self.mark_current_queue_entry_selected()
-        else:
+        if not self.select_current_queue_brawler("Prestige reward queued brawler selection"):
             print("Could not switch after prestige reward; delaying next match start.")
             self.window_controller.keys_up(list("wasd"))
+
+    # ------------------------------------------------------------------ #
+    # Play Again helpers (ported from rc fork)                             #
+    # ------------------------------------------------------------------ #
+
+    def should_use_play_again(self, value=0, target=0):
+        if self.post_match_action != "play_again":
+            return False
+        try:
+            return int(value) < int(target)
+        except (TypeError, ValueError):
+            return True
+
+    def _scaled_crop(self, image, region):
+        if image is None or image.size == 0:
+            return None
+        height, width = image.shape[:2]
+        x, y, w, h = region
+        x1 = max(0, int(x * width / 1920))
+        y1 = max(0, int(y * height / 1080))
+        x2 = min(width, int((x + w) * width / 1920))
+        y2 = min(height, int((y + h) * height / 1080))
+        crop = image[y1:y2, x1:x2]
+        return crop if crop.size else None
+
+    @staticmethod
+    def _button_color_ratios(crop):
+        import numpy as np
+        hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+        blue   = cv2.inRange(hsv, np.array((95, 80, 100),  dtype=np.uint8), np.array((125, 255, 255), dtype=np.uint8))
+        green  = cv2.inRange(hsv, np.array((42, 70, 100),  dtype=np.uint8), np.array((82,  255, 255), dtype=np.uint8))
+        yellow = cv2.inRange(hsv, np.array((18, 70, 110),  dtype=np.uint8), np.array((38,  255, 255), dtype=np.uint8))
+        dark   = cv2.inRange(hsv, np.array((0,  0,  0),    dtype=np.uint8), np.array((179, 255, 90),  dtype=np.uint8))
+        total = max(1, crop.shape[0] * crop.shape[1])
+        return {
+            "button": (cv2.countNonZero(blue) + cv2.countNonZero(green) + cv2.countNonZero(yellow)) / total,
+            "dark":   cv2.countNonZero(dark) / total,
+        }
+
+    def is_play_again_button_visually_available(self, screenshot):
+        play_crop = self._scaled_crop(screenshot, [1030, 850, 360, 150])
+        if play_crop is None:
+            return False
+        ratios = self._button_color_ratios(play_crop)
+        return ratios["button"] > 0.18 and ratios["dark"] > 0.035
+
+    def get_play_again_text_state(self, screenshot):
+        try:
+            height, width = screenshot.shape[:2]
+            button_crop = screenshot[int(height * 0.78):height, int(width * 0.72):width]
+            texts = extract_text_strings(button_crop)
+        except Exception:
+            return ""
+        normalized_words = [normalize_brawler_name(text) for text in texts]
+        normalized_text = " ".join(normalized_words)
+        compact_text = "".join(normalized_words)
+        play_again_visible = (
+            "play" in normalized_text and "again" in normalized_text
+        ) or "playagain" in compact_text
+        if play_again_visible:
+            return "play_again"
+        if "exit" in normalized_text:
+            return "exit"
+        return ""
+
+    def get_play_again_missing_exit_center(self, screenshot, allow_ocr=False):
+        if screenshot is None or screenshot.size == 0:
+            return None
+        play_crop = self._scaled_crop(screenshot, [1030, 850, 360, 150])
+        exit_crop = self._scaled_crop(screenshot, [1480, 850, 380, 170])
+        if exit_crop is None:
+            return None
+        exit_ratios = self._button_color_ratios(exit_crop)
+        play_ratios = self._button_color_ratios(play_crop) if play_crop is not None else {"button": 0.0, "dark": 0.0}
+        if exit_ratios["button"] > 0.20 and exit_ratios["dark"] > 0.035 and play_ratios["button"] < 0.12:
+            return (
+                int(1660 * self.window_controller.width_ratio),
+                int(980  * self.window_controller.height_ratio),
+            )
+        if not allow_ocr:
+            return None
+        text_state = self.get_play_again_text_state(screenshot)
+        if text_state != "exit":
+            return None
+        return (
+            int(1660 * self.window_controller.width_ratio),
+            int(980  * self.window_controller.height_ratio),
+        )
+
+    def click_play_again_button(self):
+        self.window_controller.click(
+            int(1215 * self.window_controller.width_ratio),
+            int(935  * self.window_controller.height_ratio),
+            delay=0.08,
+        )
+
+    def dismiss_end_screen(self, use_play_again=False):
+        """Dismiss the post-match end screen, optionally clicking Play Again."""
+        self.window_controller.keys_up(list("wasd"))
+        if use_play_again:
+            screenshot = self.window_controller.screenshot()
+            if self.is_play_again_button_visually_available(screenshot):
+                print("Post-match action: clicking PLAY AGAIN.")
+                self.click_play_again_button()
+                return
+            exit_center = self.get_play_again_missing_exit_center(screenshot, allow_ocr=False)
+            if exit_center is not None:
+                print("Play Again unavailable; clicking EXIT to requeue from lobby.")
+                self.window_controller.click(*exit_center, delay=0.08)
+                return
+            text_state = self.get_play_again_text_state(screenshot)
+            if text_state == "play_again":
+                print("Post-match action: clicking PLAY AGAIN.")
+                self.click_play_again_button()
+                return
+            if text_state == "exit":
+                print("Play Again unavailable; clicking EXIT to requeue from lobby.")
+                self.window_controller.click(
+                    int(1660 * self.window_controller.width_ratio),
+                    int(980  * self.window_controller.height_ratio),
+                    delay=0.08,
+                )
+                return
+            print("Play Again button is not enabled; pressing continue instead.")
+        self.window_controller.press_key("Q")
 
     def end_game(self):
         screenshot = self.window_controller.screenshot()
@@ -683,6 +891,7 @@ class StageManager:
         current_result = current_state.split("_", 1)[1] if current_state.startswith("end_") else None
         already_recorded = current_result is not None and self.active_end_result == current_result
         stats_recorded = already_recorded
+        use_play_again = False
         if already_recorded:
             found_game_result = current_result
             print(f"end_game: re-entry on '{current_state}', skipping trophy update")
@@ -726,8 +935,18 @@ class StageManager:
                     push_current_brawler_till = 300
                 if push_current_brawler_till == "" and type_to_push == "trophies":
                     push_current_brawler_till = 1000
+                push_current_brawler_till = self._number_or_default(
+                    push_current_brawler_till,
+                    1000 if type_to_push == "trophies" else 300,
+                )
+                value = self._number_or_default(value, 0)
+
+                # Determine whether to click Play Again or go back to lobby.
+                use_play_again = self.should_use_play_again(value, push_current_brawler_till)
 
                 if value >= push_current_brawler_till:
+                    # Target reached — always go back to lobby regardless of play_again mode.
+                    use_play_again = False
                     if len(self.brawlers_pick_data) <= 1:
                         print(
                             "Brawler reached required trophies/wins. No more brawlers selected for pushing in the menu. "
@@ -744,12 +963,19 @@ class StageManager:
                                 }),
                             )
                             self.completion_notification_sent = True
-            
+                    else:
+                        print(
+                            "Brawler reached required trophies/wins. "
+                            "Will switch brawler as soon as lobby is reached.",
+                            value,
+                            push_current_brawler_till,
+                        )
+
             # Keep pressing the dismiss key on every iteration until the
             # end-of-match screens give way. One press is rarely enough in
             # showdown: after the place screen there can be star drops,
             # trophy rewards, and offers to dismiss.
-            self.window_controller.press_key("Q")
+            self.dismiss_end_screen(use_play_again=use_play_again)
             button_pressed = True
 
             time.sleep(self.end_screen_dismiss_delay)
@@ -757,6 +983,11 @@ class StageManager:
             current_state = get_state(screenshot)
 
         print("Game has ended", current_state)
+        if self.starr_drop is not None:
+            self.starr_drop.force_active_for(60)
+
+    def set_starr_drop(self, starr_drop_integration) -> None:
+        self.starr_drop = starr_drop_integration
 
     def quit_shop(self):
         self.window_controller.click(100*self.window_controller.width_ratio, 60*self.window_controller.height_ratio)

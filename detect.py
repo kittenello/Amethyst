@@ -243,21 +243,29 @@ def _postprocess_raw(raw_output, conf_thresh=0.6, iou_thresh=0.6):
     confidences = confidences[mask]
     class_ids = class_ids[mask]
 
-    results = []
-    for class_id in np.unique(class_ids):
-        class_mask = class_ids == class_id
-        class_boxes = boxes_xyxy[class_mask]
-        class_scores = confidences[class_mask]
-        keep = _numpy_nms(class_boxes, class_scores, iou_thresh)
-        if len(keep) == 0:
-            continue
+    # batched NMS via cv2 (C++ backend, ~3-5x faster than pure numpy loop)
+    xywh = np.empty_like(boxes_xyxy)
+    xywh[:, 0] = boxes_xyxy[:, 0]
+    xywh[:, 1] = boxes_xyxy[:, 1]
+    xywh[:, 2] = boxes_xyxy[:, 2] - boxes_xyxy[:, 0]
+    xywh[:, 3] = boxes_xyxy[:, 3] - boxes_xyxy[:, 1]
 
-        kept_boxes = class_boxes[keep]
-        kept_scores = class_scores[keep]
-        kept_classes = np.full((len(keep), 1), class_id, dtype=np.float32)
-        results.append(np.hstack([kept_boxes, kept_scores.reshape(-1, 1), kept_classes]))
+    keep_idx = cv2.dnn.NMSBoxesBatched(
+        xywh.tolist(),
+        confidences.tolist(),
+        class_ids.tolist(),
+        score_threshold=conf_thresh,
+        nms_threshold=iou_thresh,
+    )
 
-    return results
+    if len(keep_idx) == 0:
+        return []
+
+    keep_idx = np.array(keep_idx, dtype=np.int32)
+    kept_boxes   = boxes_xyxy[keep_idx]
+    kept_scores  = confidences[keep_idx].reshape(-1, 1)
+    kept_classes = class_ids[keep_idx].reshape(-1, 1).astype(np.float32)
+    return [np.hstack([kept_boxes, kept_scores, kept_classes])]
 
 
 class Detect:
@@ -376,13 +384,15 @@ class Detect:
             self._last_resized_w = new_w
             self._last_resized_h = new_h
 
-        resized_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        img_float = resized_img.astype(np.float32, copy=True)
-        np.multiply(img_float, 1.0 / 255.0, out=img_float)
+        # INTER_AREA is faster and sharper when downscaling
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized_img = cv2.resize(img, (new_w, new_h), interpolation=interp)
 
-        self._padded_img_buffer[0, 0, :new_h, :new_w] = img_float[:, :, 0]
-        self._padded_img_buffer[0, 1, :new_h, :new_w] = img_float[:, :, 1]
-        self._padded_img_buffer[0, 2, :new_h, :new_w] = img_float[:, :, 2]
+        # single float32 conversion + one-shot CHW copy avoids 3 extra passes
+        img_float = resized_img.astype(np.float32)
+        img_float *= 1.0 / 255.0
+        np.copyto(self._padded_img_buffer[0, :, :new_h, :new_w],
+                  img_float.transpose(2, 0, 1))
 
         return self._padded_img_buffer, new_w, new_h
 

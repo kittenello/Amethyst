@@ -4,7 +4,6 @@ import os
 import requests
 from PIL import Image
 
-
 brawlers_url = "https://api.brawlify.com/v1/brawlers"
 brawlers_data = requests.get(brawlers_url).json()['list']
 
@@ -15,3 +14,4 @@ for brawler_obj in brawlers_data:
     brawler_name = str(brawler_obj['name']).lower()
     brawler_name = os.path.basename(brawler_name).replace('.', '').replace('/', '').replace('\\', '')
     image.save(f"./assets/brawler_icons2/{brawler_name}.png")
+    input()

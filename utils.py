@@ -4,6 +4,9 @@ import io
 import os
 import re
 import time
+import shutil
+import subprocess
+import tempfile
 from io import BytesIO
 import ctypes
 import json
@@ -175,14 +178,128 @@ def refresh_brawl_stars_api_token_if_enabled(config, file_path="cfg/brawl_stars_
     return config
 
 
-class DefaultEasyOCR:
-    def __init__(self):
-        import easyocr
+class TesseractOCR:
+    """EasyOCR-compatible wrapper around the external Tesseract executable.
 
-        self.reader = easyocr.Reader(['en'])
+    This selector intentionally does not import EasyOCR/PyTorch. On some
+    Windows/LDPlayer setups EasyOCR exits the process while probing GPU/CPU
+    backends, so brawler-name selection must use a separate OCR executable.
+    """
+
+    def __init__(self, command=None):
+        configured_command = str(command or "").strip().strip('"')
+        self.command = configured_command or os.environ.get("TESSERACT_CMD") or shutil.which("tesseract")
+        if not self.command:
+            default_windows_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            if os.path.exists(default_windows_path):
+                self.command = default_windows_path
+        if not self.command:
+            raise RuntimeError(
+                "Tesseract executable was not found. Install Tesseract OCR and either add it to PATH "
+                "or set tesseract_cmd in cfg/general_config.toml."
+            )
+
+    def _write_temp_image(self, image_input):
+        temp = tempfile.NamedTemporaryFile(prefix="tm_ocr_", suffix=".png", delete=False)
+        temp_path = temp.name
+        temp.close()
+
+        if isinstance(image_input, str):
+            image = cv2.imread(image_input, cv2.IMREAD_COLOR)
+            if image is None:
+                raise RuntimeError(f"Could not read image for OCR: {image_input}")
+            cv2.imwrite(temp_path, image)
+            return temp_path
+
+        if isinstance(image_input, Image.Image):
+            image_input.save(temp_path)
+            return temp_path
+
+        if isinstance(image_input, np.ndarray):
+            image = image_input
+            if image.ndim == 2:
+                cv2.imwrite(temp_path, image)
+            else:
+                # Screenshots in this project are RGB; OpenCV writes BGR.
+                if image.shape[2] == 4:
+                    image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGRA)
+                else:
+                    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(temp_path, image)
+            return temp_path
+
+        raise RuntimeError(f"Unsupported image type for OCR: {type(image_input)!r}")
 
     def readtext(self, image_input):
-        return self.reader.readtext(image_input)
+        image_path = self._write_temp_image(image_input)
+        try:
+            config = load_toml_as_dict("cfg/general_config.toml")
+            psm = str(config.get("tesseract_psm", "11")).strip() or "11"
+            min_conf = float(config.get("tesseract_min_confidence", 35))
+            timeout = float(config.get("tesseract_timeout", 8))
+            cmd = [
+                self.command,
+                image_path,
+                "stdout",
+                "--oem",
+                "1",
+                "--psm",
+                psm,
+                "-l",
+                "eng",
+                "tsv",
+                "-c",
+                "tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789&'-. ",
+            ]
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr.strip() or "Tesseract OCR failed")
+
+            rows = [line.split("\t") for line in proc.stdout.splitlines() if line.strip()]
+            if not rows:
+                return []
+            header = rows[0]
+            index = {name: i for i, name in enumerate(header)}
+            output = []
+            for row in rows[1:]:
+                if len(row) < len(header):
+                    continue
+                text = row[index.get("text", -1)].strip() if "text" in index else ""
+                if not text:
+                    continue
+                try:
+                    conf = float(row[index["conf"]])
+                except (KeyError, ValueError):
+                    conf = 0.0
+                if conf < min_conf:
+                    continue
+                try:
+                    left = float(row[index["left"]])
+                    top = float(row[index["top"]])
+                    width = float(row[index["width"]])
+                    height = float(row[index["height"]])
+                except (KeyError, ValueError):
+                    continue
+                bbox = [
+                    [left, top],
+                    [left + width, top],
+                    [left + width, top + height],
+                    [left, top + height],
+                ]
+                output.append((bbox, text, conf / 100.0))
+            return output
+        finally:
+            try:
+                os.unlink(image_path)
+            except OSError:
+                pass
 
 
 cached_toml = {}
@@ -209,13 +326,44 @@ def save_dict_as_toml(data, file_path):
 
 
 reader = None
+_ocr_init_error = None
 
 
 def get_ocr_reader():
-    global reader
-    if reader is None:
-        reader = DefaultEasyOCR()
-    return reader
+    """Return the configured OCR reader without importing EasyOCR by default.
+
+    cfg/general_config.toml may define:
+      ocr_backend = "tesseract" | "none"
+      tesseract_cmd = "C:/Program Files/Tesseract-OCR/tesseract.exe"
+
+    The default is Tesseract-only. EasyOCR is deliberately not used because it
+    can hard-crash before Python can catch the exception on this setup.
+    """
+    global reader, _ocr_init_error
+    if reader is not None:
+        return reader
+    if _ocr_init_error is not None:
+        raise RuntimeError(_ocr_init_error)
+
+    config = load_toml_as_dict("cfg/general_config.toml")
+    backend = str(config.get("ocr_backend", "tesseract")).strip().lower()
+    tesseract_cmd = str(config.get("tesseract_cmd", "")).strip()
+
+    if backend in ("none", "off", "disabled", "false", "0"):
+        _ocr_init_error = "OCR is disabled by ocr_backend in cfg/general_config.toml."
+        raise RuntimeError(_ocr_init_error)
+
+    if backend in ("auto", "tesseract", "tess"):
+        try:
+            reader = TesseractOCR(tesseract_cmd)
+            print("Using Tesseract OCR backend for brawler name selection.")
+            return reader
+        except Exception as e:
+            _ocr_init_error = str(e)
+            raise RuntimeError(_ocr_init_error)
+
+    _ocr_init_error = f"Unknown/unsafe ocr_backend '{backend}'. Use tesseract or none."
+    raise RuntimeError(_ocr_init_error)
 
 
 def extract_text_and_positions(image_path):
@@ -231,7 +379,8 @@ def extract_text_and_positions(image_path):
             'top_right': top_right,
             'bottom_right': bottom_right,
             'bottom_left': bottom_left,
-            'center': center
+            'center': center,
+            'confidence': prob,
         }
 
         text_details[text.lower()] = formatted_bbox

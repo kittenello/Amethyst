@@ -6,6 +6,7 @@ import sys
 import time
 import traceback
 import json
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -48,6 +49,57 @@ if platform.architecture()[0] != "64bit":
     print(f"Current Python: {sys.executable}")
 
 pyla_version = load_toml_as_dict("./cfg/general_config.toml")['pyla_version']
+
+
+def queue_order_for_log(queue):
+    if not isinstance(queue, list):
+        return []
+    return [str(row.get("brawler", "")) for row in queue if isinstance(row, dict)]
+
+
+def _queue_api_url():
+    return os.environ.get("PYLA_QUEUE_API_URL", "http://127.0.0.1:8765/api/queue")
+
+
+def fetch_queue_from_webapp(timeout=0.75):
+    url = _queue_api_url()
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    queue = payload.get("queue") if isinstance(payload, dict) else payload
+    return queue if isinstance(queue, list) and queue else None
+
+
+def load_startup_queue(data):
+    old_order = queue_order_for_log(data)
+
+    try:
+        webapp_queue = fetch_queue_from_webapp(timeout=0.75)
+    except Exception as e:
+        print(f"Could not read live queue from {_queue_api_url()} at startup; falling back to file/launcher queue. {e}")
+    else:
+        if webapp_queue:
+            new_order = queue_order_for_log(webapp_queue)
+            if new_order and new_order != old_order:
+                print(f"Startup queue reloaded from webapp /api/queue: {old_order[:8]} -> {new_order[:8]}")
+            return webapp_queue
+
+    queue_path = Path("latest_brawler_data.json")
+    if not queue_path.exists():
+        return data
+    try:
+        saved_queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"Could not read latest_brawler_data.json at startup; using launcher queue. {e}")
+        return data
+
+    if not isinstance(saved_queue, list) or not saved_queue:
+        return data
+
+    new_order = queue_order_for_log(saved_queue)
+    if new_order and new_order != old_order:
+        print(f"Startup queue reloaded from latest_brawler_data.json: {old_order[:8]} -> {new_order[:8]}")
+    return saved_queue
 
 
 def parse_max_ips(value):
@@ -98,6 +150,7 @@ def should_accept_lobby_after_match(pending_for, confirm_seconds):
 
 
 def pyla_main(data):
+    data = load_startup_queue(data)
 
     class Main:
 
@@ -117,13 +170,16 @@ def pyla_main(data):
                 print(f"Picking brawler automatically before first match: {first_brawler}")
                 selection_method = first_row.get('selection_method', 'named_brawler')
                 try:
-                    if selection_method == 'lowest_trophies':
-                        selected = self.lobby_automator.select_lowest_trophy_brawler()
-                        if not selected and first_brawler:
-                            print("Lowest-trophy quick select failed, falling back to named brawler selection.")
-                            self.lobby_automator.select_brawler(first_brawler)
-                    elif first_brawler:
-                        self.lobby_automator.select_brawler(first_brawler)
+                    if first_brawler:
+                        # The queue order already encodes lowest/highest trophy sorting.
+                        # In game we must pick the exact first queued brawler, not the
+                        # first card after opening the Brawl Stars sort menu.
+                        if not self.lobby_automator.select_brawler(first_brawler):
+                            print("Initial auto-pick did not confirm the selected brawler; the stage manager will retry from lobby.")
+                    elif selection_method == 'lowest_trophies':
+                        # Backward-compatible fallback for legacy queue rows without a name.
+                        if not self.lobby_automator.select_lowest_trophy_brawler():
+                            print("Initial lowest-trophy auto-pick did not confirm lobby; the stage manager will retry.")
                 except Exception as e:
                     print(f"Initial auto-pick failed: {e}. The stage manager will retry from lobby.")
             self.Play.current_brawler = first_row.get('brawler', 'none')
@@ -230,6 +286,7 @@ def pyla_main(data):
                 window_controller=self.window_controller,
             )
             self.starr_drop.start()
+            self.Stage_manager.set_starr_drop(self.starr_drop)
             self.was_paused = False
             self.pause_started_at = None
             self.web_runtime_path = Path("logs") / "web_runtime.json"
@@ -584,6 +641,10 @@ def pyla_main(data):
                     self.lobby_entered_at = None
                 return False
 
+            # Don't press Q or restart if all targets are done.
+            if getattr(self.Stage_manager, "farming_complete", False):
+                return False
+
             if self.lobby_entered_at is None:
                 self.lobby_entered_at = now
 
@@ -882,8 +943,9 @@ def pyla_main(data):
                     cprint("Stop requested from web dashboard. Stopping bot.", "#AAE5A4")
                     break
                 if getattr(self.Stage_manager, "farming_complete", False):
-                    cprint("All queued targets completed. Bot is idle in lobby; returning control to dashboard.", "#AAE5A4")
-                    break
+                    if self.state not in ("match", "match_making"):
+                        cprint("All queued targets completed. Bot is idle in lobby; returning control to dashboard.", "#AAE5A4")
+                        break
                 if self.handle_pause_control():
                     s_time = time.time()
                     c = 0
@@ -999,6 +1061,32 @@ def pyla_main(data):
     main.main()
 
 
+def _try_auto_start_telegram_bot():
+    try:
+        from telegram_notifier import load_telegram_settings
+        settings = load_telegram_settings()
+        if not settings.get("auto_start_bot", False):
+            return
+        token = settings.get("bot_token", "").strip()
+        chat_id = settings.get("chat_id", "")
+        if not token or not chat_id:
+            return
+        import threading
+        import asyncio as _asyncio
+        from telegram.bot import main as telegram_main
+
+        def _run():
+            try:
+                _asyncio.run(telegram_main())
+            except Exception as exc:
+                print(f"[Telegram] Bot thread error: {exc}")
+
+        t = threading.Thread(target=_run, daemon=True, name="TelegramBot")
+        t.start()
+    except Exception as exc:
+        print(f"telegram auto start failed {exc}")
+
+
 def run_app():
     all_brawlers = get_brawler_list()
     if api_base_url != "localhost":
@@ -1017,6 +1105,9 @@ def run_app():
 
     latest_version = pyla_version if api_base_url == "localhost" else get_latest_version()
     web_app = WebApp(set_data, all_brawlers, pyla_version, latest_version)
+
+    # Auto-start Telegram bot if enabled in telegram_config.toml
+    _try_auto_start_telegram_bot()
 
     web_app.start()
     while True:

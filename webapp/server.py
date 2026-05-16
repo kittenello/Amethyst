@@ -826,7 +826,14 @@ class WebApp:
 
     @staticmethod
     def get_settings(bot_config, general_config):
+        post_match_action = str(bot_config.get("post_match_action", "lobby")).strip().lower()
+        if post_match_action not in ("lobby", "play_again"):
+            post_match_action = "lobby"
         return {
+            "core": {
+                "play_again": post_match_action == "play_again",
+                "global_pick_brawlers": bool(bot_config.get("global_pick_brawlers", False)),
+            },
             "general": {
                 "trophies_multiplier": general_config.get("trophies_multiplier", 1),
                 "emulator_port": general_config.get("emulator_port", 5555),
@@ -856,19 +863,25 @@ class WebApp:
             "telegram": load_toml_as_dict(str(ROOT / "cfg" / "telegram_config.toml")),
         }
 
+    def _global_pick_enabled(self):
+        bot_config = load_toml_as_dict(str(ROOT / "cfg" / "bot_config.toml"))
+        return bool(bot_config.get("global_pick_brawlers", False))
+
     def save_queue_entry(self, payload):
         queue = self._read_json(ROOT / "latest_brawler_data.json", [])
         if not isinstance(queue, list):
             queue = []
         brawler = str(payload.get("brawler", "")).strip()
         push_type = payload.get("type", "trophies")
+        auto_pick = True if self._global_pick_enabled() else bool(payload.get("automatically_pick", bool(queue)))
         data = {
             "brawler": brawler,
             "push_until": self._int_value(payload.get("push_until"), 1000 if push_type == "trophies" else 300),
             "trophies": self._int_value(payload.get("trophies"), 0),
             "wins": self._int_value(payload.get("wins"), 0),
             "type": push_type if push_type in ("trophies", "wins") else "trophies",
-            "automatically_pick": bool(payload.get("automatically_pick", bool(queue))),
+            "automatically_pick": auto_pick,
+            "selection_method": payload.get("selection_method", "lowest_trophies") if payload.get("selection_method") in ("lowest_trophies", "highest_trophies") else "lowest_trophies",
             "win_streak": self._int_value(payload.get("win_streak"), 0),
         }
         queue = [row for row in queue if row.get("brawler") != brawler]
@@ -895,6 +908,9 @@ class WebApp:
         if not isinstance(queue, list) or not queue:
             queue = self._read_json(ROOT / "latest_brawler_data.json", [])
         playstyle = str(payload.get("playstyle", "")).strip()
+        if not playstyle:
+            bot_config_saved = load_toml_as_dict(str(ROOT / "cfg" / "bot_config.toml"))
+            playstyle = str(bot_config_saved.get("current_playstyle", "")).strip()
         if not queue or not playstyle:
             raise ValueError("Queue and playstyle are required before starting.")
         bot_config_path = str(ROOT / "cfg" / "bot_config.toml")
@@ -962,10 +978,103 @@ class WebApp:
         save_brawler_data([])
         return {"queue": []}
 
+    def get_queue(self):
+        queue = self._read_json(ROOT / "latest_brawler_data.json", [])
+        return {"queue": queue if isinstance(queue, list) else []}
+
+    def create_queue_entry(self, payload):
+        queue = self._read_json(ROOT / "latest_brawler_data.json", [])
+        if not isinstance(queue, list):
+            queue = []
+        brawler = str(payload.get("brawler", "")).strip()
+        if not brawler:
+            raise ValueError("brawler is required")
+        push_type = payload.get("type", "trophies")
+        selection_method = payload.get("selection_method", "lowest_trophies")
+        if selection_method not in ("lowest_trophies", "highest_trophies"):
+            selection_method = "lowest_trophies"
+        data = {
+            "brawler": brawler,
+            "push_until": self._int_value(payload.get("push_until"), 1000 if push_type == "trophies" else 300),
+            "trophies": self._int_value(payload.get("trophies"), 0),
+            "wins": self._int_value(payload.get("wins"), 0),
+            "type": push_type if push_type in ("trophies", "wins") else "trophies",
+            "automatically_pick": True if self._global_pick_enabled() else bool(payload.get("automatically_pick", True)),
+            "selection_method": selection_method,
+            "win_streak": self._int_value(payload.get("win_streak"), 0),
+        }
+        queue = [row for row in queue if row.get("brawler") != brawler]
+        queue.append(data)
+        save_brawler_data(queue)
+        return {"queue": queue}
+
+    def delete_queue_entry(self, payload):
+        brawler = str(payload.get("brawler", "")).strip()
+        if not brawler:
+            raise ValueError("brawler is required")
+        queue = self._read_json(ROOT / "latest_brawler_data.json", [])
+        if not isinstance(queue, list):
+            queue = []
+        queue = [row for row in queue if row.get("brawler") != brawler]
+        save_brawler_data(queue)
+        return {"queue": queue}
+
+    def reorder_queue(self, payload):
+        order = payload.get("order")
+        if not isinstance(order, list):
+            raise ValueError("order must be a list of brawler names")
+        queue = self._read_json(ROOT / "latest_brawler_data.json", [])
+        if not isinstance(queue, list):
+            queue = []
+        index_map = {row.get("brawler"): row for row in queue}
+        reordered = [index_map[b] for b in order if b in index_map]
+        # keep any brawlers not mentioned at the end
+        mentioned = set(order)
+        for row in queue:
+            if row.get("brawler") not in mentioned:
+                reordered.append(row)
+        save_brawler_data(reordered)
+        return {"queue": reordered}
+
+    def resume_bot(self):
+        logs_dir = ROOT / "logs"
+        stop_flag = logs_dir / "web_stop_requested.flag"
+        try:
+            stop_flag.unlink()
+        except OSError:
+            pass
+        for path in logs_dir.glob("runtime_control_*.state"):
+            try:
+                path.write_text("running", encoding="utf-8")
+            except OSError:
+                pass
+
+        # Load queue and playstyle from saved files so pyla_main can restart.
+        queue = self._read_json(ROOT / "latest_brawler_data.json", [])
+        if not isinstance(queue, list):
+            queue = []
+        bot_config = load_toml_as_dict(str(ROOT / "cfg" / "bot_config.toml"))
+        playstyle = str(bot_config.get("current_playstyle", "")).strip()
+
+        if not queue or not playstyle:
+            # Bot was never started from dashboard — nothing to resume.
+            with self.runtime_lock:
+                self.runtime_state = "running"
+            self.ready.set()
+            return {"ok": True, "state": "running", "warning": "No queue or playstyle saved; start from dashboard first."}
+
+        self.selected_data = queue
+        self.data_setter(queue)
+        with self.runtime_lock:
+            self.runtime_state = "running"
+        self.ready.set()
+        return {"ok": True, "state": "running"}
+
     def update_config(self, payload):
         path_map = {
             "general": ROOT / "cfg" / "general_config.toml",
             "bot": ROOT / "cfg" / "bot_config.toml",
+            "core": ROOT / "cfg" / "bot_config.toml",
             "timers": ROOT / "cfg" / "time_tresholds.toml",
             "discord": ROOT / "cfg" / "discord_config.toml",
             "telegram": ROOT / "cfg" / "telegram_config.toml",
@@ -977,7 +1086,13 @@ class WebApp:
             raise ValueError("Invalid settings target.")
         path = str(path_map[section])
         config = dict(load_toml_as_dict(path))
-        config[str(key)] = payload.get("value")
+        # Map core.play_again (bool) → bot_config.post_match_action (string)
+        if section == "core" and key == "play_again":
+            config["post_match_action"] = "play_again" if payload.get("value") else "lobby"
+        elif section == "core" and key == "global_pick_brawlers":
+            config["global_pick_brawlers"] = bool(payload.get("value"))
+        else:
+            config[str(key)] = payload.get("value")
         save_dict_as_toml(config, path)
         # Reload starr_drop_detect at runtime if the flag changed
         if section == "general" and key == "starr_drop_detect":
@@ -1043,13 +1158,11 @@ class WebApp:
         return {"ok": bool(ok)}
 
     def start_telegram_bot(self):
-        """Start Telegram bot in current process"""
         try:
             import threading
             import asyncio
             from telegram.bot import main as telegram_main
             
-            # Start telegram bot in background thread
             def run_telegram():
                 try:
                     asyncio.run(telegram_main())
@@ -1059,7 +1172,7 @@ class WebApp:
             thread = threading.Thread(target=run_telegram, daemon=True)
             thread.start()
             
-            return {"ok": True, "message": "Telegram bot started in background thread"}
+            return {"ok": True, "message": "telegram bot started"}
         except Exception as exc:
             raise ValueError(str(exc))
 
@@ -1233,6 +1346,8 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/shutdown":
             self.web_app.ready.set()
             return self.send_json({"ok": True})
+        if parsed.path == "/api/queue":
+            return self.send_json(self.web_app.get_queue())
         if parsed.path == "/api/multi/state":
             return self.send_json(self.web_app.multi.public_state())
         if parsed.path == "/api/multi/scan":
@@ -1248,12 +1363,20 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
         try:
             if parsed.path == "/api/queue":
                 return self.send_json({"queue": self.web_app.save_queue_entry(payload)})
+            if parsed.path == "/api/queuecreate":
+                return self.send_json(self.web_app.create_queue_entry(payload))
+            if parsed.path == "/api/queuedelete":
+                return self.send_json(self.web_app.delete_queue_entry(payload))
+            if parsed.path == "/api/queue/reorder":
+                return self.send_json(self.web_app.reorder_queue(payload))
             if parsed.path == "/api/queue/bulk":
                 return self.send_json({"queue": self.web_app.save_queue_bulk(payload)})
             if parsed.path == "/api/start":
                 return self.send_json(self.web_app.start_bot(payload))
             if parsed.path == "/api/stop":
                 return self.send_json(self.web_app.stop_bot())
+            if parsed.path == "/api/resume":
+                return self.send_json(self.web_app.resume_bot())
             if parsed.path == "/api/queue/clear":
                 return self.send_json(self.web_app.clear_queue())
             if parsed.path == "/api/settings":

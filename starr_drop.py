@@ -304,6 +304,9 @@ class StarrDropIntegration:
         self._sleep_evt = threading.Event()
         self._sleep_evt.set()
 
+        self._force_active_until: float = 0.0
+        self._force_lock = threading.Lock()
+
         self._enabled: bool = _load_config_flag()
 
     def start(self) -> None:
@@ -326,13 +329,38 @@ class StarrDropIntegration:
             self._thread.join(timeout=5.0)
         print("starr drop detect stopped.")
 
+    def force_active_for(self, seconds: float) -> None:
+        if not self._enabled:
+            return
+        with self._force_lock:
+            self._force_active_until = time.monotonic() + seconds
+        print(f"starr drop: force-active for {seconds:.0f}s after game end")
+        self._sleep_evt.set()
+
+    def _is_force_active(self) -> bool:
+        with self._force_lock:
+            return time.monotonic() < self._force_active_until
+
+    def _cancel_force_active(self) -> None:
+        with self._force_lock:
+            self._force_active_until = 0.0
+
     def notify_state(self, state: Optional[str]) -> None:
         if not self._enabled:
             return
         if state in SLEEP_STATES:
-            if self._sleep_evt.is_set():
-                print(f"starr drop: pausing detector — state: {state}")
-            self._sleep_evt.clear()
+            if self._is_force_active():
+                joystick_moving = bool(getattr(self._wc, "are_we_moving", False))
+                if joystick_moving:
+                    print(f"starr drop: force-active cancelled — joystick moving in state: {state}")
+                    self._cancel_force_active()
+                    self._sleep_evt.clear()
+                else:
+                    return
+            else:
+                if self._sleep_evt.is_set():
+                    print(f"starr drop: pausing detector — state: {state}")
+                self._sleep_evt.clear()
         elif state in MATCH_RESULT_STATES:
             if not self._sleep_evt.is_set():
                 print(f"starr drop: resuming detector — match ended ({state})")
@@ -483,6 +511,9 @@ class StarrDropIntegration:
             while not self._stop_evt.is_set():
 
                 if not self._sleep_evt.is_set():
+                    if self._is_force_active():
+                        self._stop_evt.wait(timeout=max(0.05, self._interval))
+                        continue
                     self._sleep_evt.wait(timeout=1.0)
                     continue
 

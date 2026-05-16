@@ -309,12 +309,14 @@ function renderBrawlerEditor() {
   const existing = state.queue.find(q => q.brawler === selectedBrawler.id) || {};
   const type = selectedType;
   const syncedTrophies = trophyFor(selectedBrawler);
+  const globalPick = !!(state.settings?.core?.global_pick_brawlers);
+  const autoPickDefault = existing.automatically_pick !== undefined ? existing.automatically_pick : globalPick;
   host.innerHTML = `
     <div class="selected-brawler"><img src="${selectedBrawler.icon}"><div><div class="eyebrow">SELECTED BRAWLER</div><h2>${selectedBrawler.name}</h2><p>Live values synced from Player Tag when available</p></div></div>
     <div class="tabs"><button class="${type === "trophies" ? "active" : ""}" data-type="trophies">Target Trophies</button><button class="${type === "wins" ? "active" : ""}" data-type="wins">Target Wins</button></div>
     <div class="field-row"><div><label>TARGET AMOUNT</label><input id="targetAmount" class="input wide" value="${existing.push_until || (type === "trophies" ? 1000 : 300)}"></div><div><label>${type === "trophies" ? "CURRENT TROPHIES" : "CURRENT WINS"}</label><input id="currentValue" class="input wide" value="${type === "trophies" ? (syncedTrophies ?? existing.trophies ?? 0) : (existing.wins ?? 0)}"></div></div>
     ${type === "trophies" ? `<label>CURRENT WIN STREAK</label><input id="winStreak" class="input" value="${existing.win_streak ?? 0}">` : ""}
-    <label class="check"><input id="autoPick" type="checkbox" ${existing.automatically_pick ? "checked" : ""}><span><b>Automatically pick this brawler</b><br>Enabled by default once another brawler is queued ahead of it.</span></label>
+    <label class="check"><input id="autoPick" type="checkbox" ${autoPickDefault ? "checked" : ""}><span><b>Automatically pick this brawler</b><br>Enabled by default once another brawler is queued ahead of it.</span></label>
     <button id="updateQueue" class="primary">Update Queue Entry</button>`;
   document.querySelectorAll("[data-type]").forEach(btn => btn.onclick = () => { selectedType = btn.dataset.type; renderBrawlerEditor(); });
   ["targetAmount", "currentValue", "winStreak"].forEach(id => $(id)?.addEventListener("input", updateQueueButton));
@@ -336,7 +338,7 @@ async function saveQueueEntry() {
     trophies: selectedType === "trophies" ? $("currentValue").value : 0,
     wins: selectedType === "wins" ? $("currentValue").value : 0,
     win_streak: $("winStreak")?.value || 0,
-    automatically_pick: $("autoPick").checked
+    automatically_pick: $("autoPick").checked,
   };
   if (brawlersMultiMode) {
     const row = { ...payload, push_until: Number(payload.push_until) || 0, trophies: Number(payload.trophies) || 0, wins: Number(payload.wins) || 0, win_streak: Number(payload.win_streak) || 0 };
@@ -352,6 +354,16 @@ async function saveQueueEntry() {
   state.queue = res.queue;
   renderQueue();
   updateStartState();
+}
+
+let pushAllSelectionMethod = "lowest_trophies";
+
+function setPushAllMethod(method) {
+  pushAllSelectionMethod = method;
+  const lo = document.getElementById("selMethodLowest");
+  const hi = document.getElementById("selMethodHighest");
+  if (lo) lo.className = method === "lowest_trophies" ? "hot-target" : "";
+  if (hi) hi.className = method === "highest_trophies" ? "hot-target" : "";
 }
 
 function buildPushAllQueue(targetTrophies) {
@@ -371,14 +383,16 @@ function buildPushAllQueue(targetTrophies) {
       wins: 0,
       type: "trophies",
       automatically_pick: true,
-      selection_method: "lowest_trophies",
+      selection_method: pushAllSelectionMethod,
       win_streak: 0
     });
   }
 
-  rows.sort((a, b) => (a.trophies - b.trophies) || nameOf(a.brawler).localeCompare(nameOf(b.brawler)));
-  // Webapp cannot pre-click the first lowest-trophy brawler like the old Tk GUI,
-  // so every Push All row must be auto-picked by the runner, including row #1.
+  if (pushAllSelectionMethod === "highest_trophies") {
+    rows.sort((a, b) => (b.trophies - a.trophies) || nameOf(a.brawler).localeCompare(nameOf(b.brawler)));
+  } else {
+    rows.sort((a, b) => (a.trophies - b.trophies) || nameOf(a.brawler).localeCompare(nameOf(b.brawler)));
+  }
   rows.forEach(row => row.automatically_pick = true);
   return rows;
 }
@@ -508,26 +522,49 @@ function renderHistory() {
 function winRate(row) { return row.total ? Math.round(row.victory * 100 / row.total) : 0; }
 
 function renderSettings() {
+  // Build the "General" column: Play Again + Global Pick Brawlers + Starr Drop Detect
+  const coreData = state.settings.core || {};
+  const generalData = state.settings.general || {};
+  const generalRows = [
+    playAgainRow(coreData.play_again),
+    globalPickRow(coreData.global_pick_brawlers),
+    starrDropDetectRow(generalData.starr_drop_detect),
+  ].join("");
+
+  // Right column: original general settings (minus starr_drop_detect) + bot + timers
   const groups = [
-    ["general", "Core", state.settings.general],
+    ["general", "Settings", Object.fromEntries(Object.entries(generalData).filter(([k]) => k !== "starr_drop_detect"))],
     ["bot", "Detection", state.settings.bot],
     ["timers", "Timers", pick(state.settings.timers, ["super", "hypercharge", "gadget", "wall_detection", "no_detection_proceed"])]
   ];
-  $("settingsGrid").innerHTML = groups.map(([section, title, data]) => {
-    const rows = Object.entries(data).map(([key, value]) => {
-      if (section === "general" && key === "starr_drop_detect") {
-        return starrDropDetectRow(value);
-      }
-      return settingRow(section, key, value);
-    }).join("");
+
+  const leftCol = `<div class="setting-group"><div class="eyebrow">GENERAL</div>${generalRows}</div>`;
+  const rightCols = groups.map(([section, title, data]) => {
+    const rows = Object.entries(data).map(([key, value]) => settingRow(section, key, value)).join("");
     return `<div class="setting-group"><div class="eyebrow">${title.toUpperCase()}</div>${rows}</div>`;
   }).join("");
+
+  $("settingsGrid").innerHTML = leftCol + rightCols;
   document.querySelectorAll("#settingsGrid [data-setting]").forEach(input => input.onchange = saveSetting);
+}
+
+function playAgainRow(value) {
+  return `<div class="setting">
+    <div><b>Play Again</b><p>After each match, click Play Again instead of returning to lobby. When the brawler reaches its goal, exits to lobby automatically.</p></div>
+    <input data-setting="core:play_again" type="checkbox" ${value ? "checked" : ""}>
+  </div>`;
+}
+
+function globalPickRow(value) {
+  return `<div class="setting">
+    <div><b>Global Pick Brawlers</b><p>When enabled, all brawlers added to the queue will automatically have "Automatically pick this brawler" turned on.</p></div>
+    <input data-setting="core:global_pick_brawlers" type="checkbox" ${value ? "checked" : ""}>
+  </div>`;
 }
 
 function starrDropDetectRow(value) {
   return `<div class="setting">
-    <div><b>Starr Drop Detect</b><p>Auto-save</p></div>
+    <div><b>Starr Drop Detect</b></div>
     <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;">
       <button class="sd-dots-btn" onclick="openStarrDropSettings()" title="Configure Starr Drop settings">&#8942;</button>
       <input data-setting="general:starr_drop_detect" type="checkbox" ${value ? "checked" : ""}>
@@ -583,7 +620,6 @@ function renderLogging() {
     const test = section === "telegram" ? `
       <button id="telegramTest" class="secondary full-button">Test Message</button>
       <button id="espDebug" class="secondary full-button">Debug View</button>
-      <button id="startTelegramBot" class="primary full-button">Start Telegram Bot</button>
       <p id="telegramTestStatus" class="tiny-status"></p>
     ` : "";
     return `<div class="setting-group"><div class="eyebrow">${title.toUpperCase()}</div>${Object.entries(data).filter(([key]) => !key.startsWith("#")).map(([key, value]) => settingRow(section, key, value)).join("")}${test}</div>`;
@@ -591,7 +627,6 @@ function renderLogging() {
   document.querySelectorAll("#loggingGrid [data-setting]").forEach(input => input.onchange = saveSetting);
   if ($("telegramTest")) $("telegramTest").onclick = sendTelegramTest;
   if ($("espDebug")) $("espDebug").onclick = sendEspDebug;
-  if ($("startTelegramBot")) $("startTelegramBot").onclick = startTelegramBot;
 }
 
 async function sendTelegramTest() {
@@ -618,26 +653,12 @@ async function sendEspDebug() {
   }
 }
 
-async function startTelegramBot() {
-  $("telegramTestStatus").textContent = "Starting Telegram bot...";
-  try {
-    const res = await api("/api/logging/telegram-start", { method: "POST", body: "{}" });
-    if (res.ok) {
-      $("telegramTestStatus").textContent = "Telegram bot started successfully!";
-    } else {
-      $("telegramTestStatus").textContent = res.error || "Failed to start Telegram bot.";
-    }
-  } catch (err) {
-    $("telegramTestStatus").textContent = err.message;
-  }
-}
-
 function pick(obj, keys) { return Object.fromEntries(keys.map(k => [k, obj?.[k] ?? ""])); }
 
 function settingRow(section, key, value) {
   const label = key.replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase());
-  if (typeof value === "boolean") return `<div class="setting"><div><b>${label}</b><p>Auto-save</p></div><input data-setting="${section}:${key}" type="checkbox" ${value ? "checked" : ""}></div>`;
-  return `<div class="setting"><div><b>${label}</b><p>Auto-save</p></div><input data-setting="${section}:${key}" class="input" value="${value ?? ""}"></div>`;
+  if (typeof value === "boolean") return `<div class="setting"><div><b>${label}</b></div><input data-setting="${section}:${key}" type="checkbox" ${value ? "checked" : ""}></div>`;
+  return `<div class="setting"><div><b>${label}</b></div><input data-setting="${section}:${key}" class="input" value="${value ?? ""}"></div>`;
 }
 
 async function saveSetting(ev) {
@@ -660,11 +681,46 @@ function coerce(value) {
 
 function renderQueue() {
   $("queueCount").textContent = `${state.queue.length} brawler${state.queue.length === 1 ? "" : "s"} ready`;
-  $("queueItems").innerHTML = state.queue.map(row => `<div class="queue-item"><button class="queue-remove" data-remove="${row.brawler}">x</button><img src="/assets/brawler_icons/${row.brawler}.png"><div><b>${nameOf(row.brawler)}</b><small>Current ${row.type}: ${row[row.type] || 0}</small><small>Target ${row.type}: ${row.push_until}</small></div></div>`).join("");
+  const container = $("queueItems");
+  container.innerHTML = state.queue.map((row, idx) => {
+    const method = row.selection_method || "lowest_trophies";
+    return `<div class="queue-item" draggable="true" data-brawler="${row.brawler}" data-idx="${idx}"><span class="queue-drag-handle" title="drag to reorder">⠿</span><button class="queue-remove" data-remove="${row.brawler}">x</button><img src="/assets/brawler_icons/${row.brawler}.png"><div><b>${nameOf(row.brawler)}</b><small>Current ${row.type}: ${row[row.type] || 0}</small><small>Target ${row.type}: ${row.push_until}</small></div></div>`;
+  }).join("");
+
   document.querySelectorAll("[data-remove]").forEach(btn => btn.onclick = () => {
     state.queue = state.queue.filter(row => row.brawler !== btn.dataset.remove);
+    if (!brawlersMultiMode) {
+      api("/api/queuedelete", { method: "POST", body: JSON.stringify({ brawler: btn.dataset.remove }) }).catch(() => {});
+    }
     renderQueue();
     updateStartState();
+  });
+
+  let dragSrc = null;
+  container.querySelectorAll(".queue-item").forEach(item => {
+    item.addEventListener("dragstart", ev => {
+      dragSrc = item;
+      ev.dataTransfer.effectAllowed = "move";
+      item.classList.add("dragging");
+    });
+    item.addEventListener("dragend", () => item.classList.remove("dragging"));
+    item.addEventListener("dragover", ev => { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; });
+    item.addEventListener("drop", ev => {
+      ev.preventDefault();
+      if (!dragSrc || dragSrc === item) return;
+      const from = parseInt(dragSrc.dataset.idx, 10);
+      const to = parseInt(item.dataset.idx, 10);
+      const moved = state.queue.splice(from, 1)[0];
+      state.queue.splice(to, 0, moved);
+      if (!brawlersMultiMode) {
+        const order = state.queue.map(r => r.brawler);
+        api("/api/queue/reorder", { method: "POST", body: JSON.stringify({ order }) })
+          .then(res => { state.queue = res.queue; renderQueue(); })
+          .catch(() => renderQueue());
+      } else {
+        renderQueue();
+      }
+    });
   });
 }
 

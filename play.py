@@ -1362,9 +1362,27 @@ class Play(Movement):
     def is_enemy_hittable(self, player_pos, enemy_pos, walls, skill_type):
         if self.can_attack_through_walls(self.current_brawler, skill_type, self.brawlers_info):
             return True
-        if self.walls_block_line_of_sight(player_pos, enemy_pos, walls):
-            return False
-        return True
+
+        # snapped padding: real projectile has physical width
+        _PAD = 12
+        # side-ray offset (≈ half enemy hitbox) to catch corner shots
+        _SIDE = 20.0
+
+        ex, ey = enemy_pos
+        px, py = player_pos
+        dist = math.hypot(ex - px, ey - py) or 1.0
+        perp_x = -(ey - py) / dist * _SIDE
+        perp_y =  (ex - px) / dist * _SIDE
+
+        blocked = sum(
+            1 for p2 in (
+                (ex, ey),
+                (ex + perp_x, ey + perp_y),
+                (ex - perp_x, ey - perp_y),
+            )
+            if self.walls_block_line_of_sight(player_pos, p2, walls, padding=_PAD)
+        )
+        return blocked < 2
 
     def find_closest_enemy(self, enemy_data, player_coords, walls, skill_type):
         player_pos_x, player_pos_y = player_coords
@@ -1824,25 +1842,39 @@ class Play(Movement):
         return math.hypot(acx - bcx, acy - bcy)
 
     def merge_wall_boxes(self, boxes, min_hits=1):
+        _bucket_size = int(self.wall_box_merge_center_distance * 2) or 70
+        buckets: dict = {}
         clusters = []
+
         for raw_box in boxes:
             box = self.normalize_box(raw_box)
-            width = box[2] - box[0]
-            height = box[3] - box[1]
-            if width < self.wall_box_min_size or height < self.wall_box_min_size:
+            if box[2] - box[0] < self.wall_box_min_size or box[3] - box[1] < self.wall_box_min_size:
                 continue
 
+            cx = int((box[0] + box[2]) / 2)
+            cy = int((box[1] + box[3]) / 2)
+            bx = cx // _bucket_size
+            by = cy // _bucket_size
+
             matched = None
-            for cluster in clusters:
-                if (
-                        self.box_iou(cluster["box"], box) >= self.wall_box_merge_iou
-                        or self.box_center_distance(cluster["box"], box) <= self.wall_box_merge_center_distance
-                ):
-                    matched = cluster
+            for nbx in (bx - 1, bx, bx + 1):
+                for nby in (by - 1, by, by + 1):
+                    for c in buckets.get((nbx, nby), []):
+                        if (
+                            self.box_iou(c["box"], box) >= self.wall_box_merge_iou
+                            or self.box_center_distance(c["box"], box) <= self.wall_box_merge_center_distance
+                        ):
+                            matched = c
+                            break
+                    if matched:
+                        break
+                if matched:
                     break
 
             if matched is None:
-                clusters.append({"box": box, "hits": 1})
+                c = {"box": box, "hits": 1}
+                clusters.append(c)
+                buckets.setdefault((bx, by), []).append(c)
                 continue
 
             old = matched["box"]
@@ -1855,7 +1887,7 @@ class Play(Movement):
             ]
             matched["hits"] = hits + 1
 
-        return [cluster["box"] for cluster in clusters if cluster["hits"] >= min_hits]
+        return [c["box"] for c in clusters if c["hits"] >= min_hits]
 
     def process_tile_data(self, tile_data):
         walls = []
@@ -1877,6 +1909,9 @@ class Play(Movement):
         if not self.wall_history:
             return []
         current_walls = self.wall_history[-1]
+        # skip stale frames if bot is actively moving — positions shift
+        if self.keys_hold:
+            return current_walls
         historical_walls = [wall for walls in self.wall_history for wall in walls]
         stable_history = self.merge_wall_boxes(historical_walls, min_hits=max(2, self.wall_history_min_hits))
         return self.merge_wall_boxes(current_walls + stable_history)
