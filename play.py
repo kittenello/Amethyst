@@ -10,7 +10,6 @@ import numpy as np
 from state_finder import get_state
 from detect import Detect, format_onnx_backend
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info
-from water_detect import WaterDetector
 
 brawl_stars_width, brawl_stars_height = 1920, 1080
 debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
@@ -460,12 +459,6 @@ class Play(Movement):
             tile_detector_model,
             classes=self.tile_detector_model_classes
         )
-
-        # Water detection — HSV colour-segmentation, no ONNX model needed
-        self.water_detection_enabled = str(bot_config.get("water_detection_enabled", "yes")).lower() in ("yes", "true", "1", "y", "on")
-        self.water_detector = WaterDetector() if self.water_detection_enabled else None
-        if self.water_detection_enabled:
-            print("[WaterDetect] Enabled (HSV-based, no ONNX).")
 
         self.time_since_movement = time.time()
         self.time_since_gadget_checked = time.time()
@@ -1839,20 +1832,6 @@ class Play(Movement):
 
     def get_tile_data(self, frame, match_state=None):
         tile_data = self.Detect_tile_detector.detect_objects(frame, conf_tresh=self.wall_detection_confidence)
-
-        # Water detection via HSV colour segmentation (no ONNX required).
-        # Only runs during an active match to avoid false positives in menus/lobby.
-        # Water boxes are stored under the 'water' key AND merged into 'wall'
-        # so the existing pathfinding / avoidance logic treats them as solid obstacles.
-        if self.water_detection_enabled and self.water_detector is not None:
-            try:
-                water_boxes = self.water_detector.detect(frame, match_state=match_state)
-                tile_data['water'] = water_boxes
-                if water_boxes:
-                    tile_data['wall'] = tile_data.get('wall', []) + water_boxes
-            except Exception as _water_err:
-                if debug:
-                    print(f"[WaterDetect] Error during detection: {_water_err}")
 
         # Combine walls, barrels, and smoke as obstacles
         obstacles = tile_data.get('wall', []) + tile_data.get('barrel', []) + tile_data.get('smoke', [])
