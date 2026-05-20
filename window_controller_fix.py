@@ -1037,10 +1037,6 @@ class WindowController:
         target_x = self.joystick_x + math.cos(angle_rad) * scaled_radius
         target_y = self.joystick_y + math.sin(angle_rad) * scaled_radius
 
-        joystick_needs_refresh = time.time() - self.last_joystick_down_time > 2.0
-        if self.are_we_moving and joystick_needs_refresh:
-            self.stop_joystick()
-
         if not self.are_we_moving:
             self.touch_down(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
             self.are_we_moving = True
@@ -1050,6 +1046,7 @@ class WindowController:
         elif self.last_joystick_pos != (target_x, target_y):
             self.touch_move(target_x, target_y, pointer_id=self.PID_JOYSTICK)
             self.last_joystick_pos = (target_x, target_y)
+            self.last_joystick_down_time = time.time()
 
     def stop_joystick(self):
         """Release the joystick touch."""
@@ -1075,10 +1072,6 @@ class WindowController:
                 delta_x += dx
                 delta_y += dy
 
-        joystick_needs_refresh = time.time() - self.last_joystick_down_time > 2.0
-        if self.are_we_moving and joystick_needs_refresh:
-            self.stop_joystick()
-
         if not self.are_we_moving:
             self.touch_down(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
             self.are_we_moving = True
@@ -1088,6 +1081,7 @@ class WindowController:
         if self.last_joystick_pos != (self.joystick_x + delta_x, self.joystick_y + delta_y):
             self.touch_move(self.joystick_x + delta_x, self.joystick_y + delta_y, pointer_id=self.PID_JOYSTICK)
             self.last_joystick_pos = (self.joystick_x + delta_x, self.joystick_y + delta_y)
+            self.last_joystick_down_time = time.time()
 
     def click(self, x: int, y: int, delay=0.005, already_include_ratio=True, touch_up=True, touch_down=True):
         if not already_include_ratio:
@@ -1132,7 +1126,7 @@ class WindowController:
         if distance == 0:
             return
 
-        step_len = 5  # уменьшено для плавности свайпов (было 25 — давало рваные движения)
+        step_len = 25
         steps = max(int(distance / step_len), 1)
         step_delay = duration / steps
 

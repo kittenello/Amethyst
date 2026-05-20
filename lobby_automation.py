@@ -138,11 +138,13 @@ class LobbyAutomation:
             if c == 0:
                 wr = self.window_controller.width_ratio
                 hr = self.window_controller.height_ratio
-                self.window_controller.swipe(int(1700 * wr), int(900 * hr), int(1700 * wr), int(650 * hr), duration=0.8)
+                # координаты свайпа подобраны вручную через coordinate_picker (было 1700, случайно тапало на бравлера)
+                self.window_controller.swipe(int(1794 * wr), int(900 * hr), int(1794 * wr), int(746 * hr), duration=0.3)  # было 0.8 — слишком медленно
                 c += 1
                 continue
 
-            self.window_controller.swipe(int(1700 * wr), int(900 * hr), int(1700 * wr), int(650 * hr), duration=0.8)
+            # координаты свайпа подобраны вручную через coordinate_picker (было 1700, случайно тапало на бравлера)
+            self.window_controller.swipe(int(1794 * wr), int(900 * hr), int(1794 * wr), int(746 * hr), duration=0.3)  # было 0.8 — слишком медленно
             time.sleep(1)
 
         if not found_brawler:
@@ -151,8 +153,6 @@ class LobbyAutomation:
                 print(f"Detected brawlers during search: {list(reworked_results.keys())}")
             else:
                 print("Detected brawlers during search: []")
-            print(f"Target normalized name: '{target_key}'")
-            print(f"The bot will continue with currently selected brawler.")
             raise ValueError(f"Brawler '{brawler}' could not be found in brawler selection menu.")
 
         return True
@@ -230,7 +230,7 @@ class LobbyAutomation:
         if best_loc is None or best_size is None:
             return None
 
-        threshold = 0.60
+        threshold = 0.7
         if best_score < threshold:
             return None
 

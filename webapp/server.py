@@ -124,7 +124,6 @@ def _requests_get_text(url, timeout, mode):
         verify = False
 
     response = session.get(url, timeout=timeout, headers=BRAWLTRACKER_HEADERS, verify=verify)
-    print(f"[WEBAPP][BRAWLTRACKER] Status: {response.status_code}, bytes: {len(response.text)}, mode={mode}")
     response.raise_for_status()
     return response.text
 
@@ -135,7 +134,6 @@ def _urllib_get_text(url, timeout):
     with urlopen(req, timeout=timeout, context=ctx) as resp:
         data = resp.read()
     html = data.decode("utf-8", errors="replace")
-    print(f"[WEBAPP][BRAWLTRACKER] Status: urllib, bytes: {len(html)}")
     return html
 
 
@@ -157,7 +155,6 @@ def _curl_get_text(url, timeout):
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or f"curl exit code {result.returncode}").strip())
-    print(f"[WEBAPP][BRAWLTRACKER] Status: curl, bytes: {len(result.stdout)}")
     return result.stdout
 
 
@@ -173,7 +170,7 @@ def fetch_url_text_robust(url, timeout=15):
 
     for index, (name, getter) in enumerate(attempts, start=1):
         try:
-            print(f"[WEBAPP][BRAWLTRACKER] Attempt {index}/{len(attempts)}: {name}")
+
             html = getter()
             if html and "brawltracker" in html.lower() or "BRAWLER" in html.upper() or "Player Icon" in html:
                 return html
@@ -182,7 +179,6 @@ def fetch_url_text_robust(url, timeout=15):
             raise RuntimeError("empty response")
         except Exception as exc:
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
-            print(f"[WEBAPP][BRAWLTRACKER][WARN] {errors[-1]}")
             time.sleep(0.5)
 
     raise RuntimeError("Brawltracker request failed after all fallbacks:\n" + "\n".join(errors))
@@ -199,16 +195,15 @@ def fetch_brawltracker_player(player_tag, timeout=15):
         raise ValueError("Player tag is empty. Write it in the web UI or cfg/brawl_stars_api.toml")
 
     url = f"https://brawltracker.com/stats/player/{quote(tag)}"
-    print(f"[WEBAPP][BRAWLTRACKER] Request: {url}")
     html = fetch_url_text_robust(url, timeout=timeout)
 
     debug_dir = ROOT / "logs"
     debug_dir.mkdir(exist_ok=True)
     try:
         (debug_dir / "debug_brawltracker.html").write_text(html, encoding="utf-8")
-        print(f"[WEBAPP][BRAWLTRACKER] HTML saved: {debug_dir / 'debug_brawltracker.html'}")
+        print(f"{debug_dir / 'debug_brawltracker.html'}")
     except OSError as exc:
-        print(f"[WEBAPP][BRAWLTRACKER][WARN] Could not save debug html: {exc}")
+        print(f"warn: could not save debug log html: {exc}")
 
     # Profile card name, example: <h2 class="...text-yellow-400">Tojoko</h2>
     player_name = ""
@@ -237,7 +232,6 @@ def fetch_brawltracker_player(player_tag, timeout=15):
         trophy_match = re.search(r'alt="Trophy".*?<span[^>]*>(\d+)</span>', card, re.I | re.S)
         power_match = re.search(r'alt="Power\s+(\d+)"', card, re.I | re.S)
         if not trophy_match:
-            print(f"[WEBAPP][BRAWLTRACKER][WARN] No trophies found for {name}")
             continue
         brawlers.append({
             "name": name,
@@ -248,7 +242,6 @@ def fetch_brawltracker_player(player_tag, timeout=15):
     if not brawlers:
         raise RuntimeError("Brawltracker HTML loaded, but no brawler cards were parsed. Check logs/debug_brawltracker.html")
 
-    print(f"[WEBAPP][BRAWLTRACKER] Parsed player={player_name or 'Player'} brawlers={len(brawlers)}")
     return {"name": player_name or "Player", "tag": f"#{tag}", "brawlers": brawlers, "source": "brawltracker"}
 
 
@@ -263,7 +256,6 @@ def load_syncbrawlers2api_module():
         spec.loader.exec_module(module)  # type: ignore[union-attr]
         return module
     except Exception as exc:
-        print(f"[WEBAPP][PLAYER][WARN] syncbrawlers2api load failed: {exc}")
         return None
 
 
@@ -839,6 +831,7 @@ class WebApp:
                 "emulator_port": general_config.get("emulator_port", 5555),
                 "brawl_stars_package": general_config.get("brawl_stars_package", "com.supercell.brawlstars"),
                 "super_debug": general_config.get("super_debug", "no"),
+                "window_controller_fix": int(general_config.get("window_controller_fix", 0)),
                 "starr_drop_detect": bool(general_config.get("starr_drop_detect", True)),
             },
             "starr_drop": {
@@ -881,7 +874,7 @@ class WebApp:
             "wins": self._int_value(payload.get("wins"), 0),
             "type": push_type if push_type in ("trophies", "wins") else "trophies",
             "automatically_pick": auto_pick,
-            "selection_method": payload.get("selection_method", "lowest_trophies") if payload.get("selection_method") in ("lowest_trophies", "highest_trophies") else "lowest_trophies",
+            "selection_method": payload.get("selection_method") if payload.get("selection_method") in ("lowest_trophies", "highest_trophies", "named_brawler") else "named_brawler",
             "win_streak": self._int_value(payload.get("win_streak"), 0),
         }
         queue = [row for row in queue if row.get("brawler") != brawler]
@@ -968,7 +961,7 @@ class WebApp:
                 "wins": self._int_value(row.get("wins"), 0),
                 "type": push_type if push_type in ("trophies", "wins") else "trophies",
                 "automatically_pick": bool(row.get("automatically_pick", bool(cleaned))),
-                "selection_method": row.get("selection_method", "lowest_trophies"),
+                "selection_method": row.get("selection_method", "named_brawler"),
                 "win_streak": self._int_value(row.get("win_streak"), 0),
             })
         save_brawler_data(cleaned)
@@ -990,9 +983,9 @@ class WebApp:
         if not brawler:
             raise ValueError("brawler is required")
         push_type = payload.get("type", "trophies")
-        selection_method = payload.get("selection_method", "lowest_trophies")
-        if selection_method not in ("lowest_trophies", "highest_trophies"):
-            selection_method = "lowest_trophies"
+        selection_method = payload.get("selection_method", "named_brawler")
+        if selection_method not in ("lowest_trophies", "highest_trophies", "named_brawler"):
+            selection_method = "named_brawler"
         data = {
             "brawler": brawler,
             "push_until": self._int_value(payload.get("push_until"), 1000 if push_type == "trophies" else 300),
@@ -1242,7 +1235,6 @@ class WebApp:
             raise ValueError(str(exc))
 
     def load_player_trophies(self, player_tag_override=None):
-        print("[WEBAPP][PLAYER] Loading player data via brawltracker + api/assets/brawler_icons2")
 
         # In Multi Instance mode the browser can pass ?tag=... so each LDPlayer tab
         # can sync a different account without overwriting cfg/brawl_stars_api.toml.
@@ -1255,9 +1247,8 @@ class WebApp:
             sync_module = load_syncbrawlers2api_module()
             if sync_module and hasattr(sync_module, "sync_from_brawltracker"):
                 player = sync_module.sync_from_brawltracker(self.brawlers)
-                print(f"[WEBAPP][PLAYER] Result: player={player.get('player', '')}, trophies={len(player.get('trophies', {}))}, source={player.get('source')}")
                 if player.get("missed"):
-                    print(f"[WEBAPP][PLAYER][WARN] Brawlers from site not found in local list: {player.get('missed')}")
+                    print(f"warning brawlers from site not found in local list: {player.get('missed')}")
                 return {
                     "player": player.get("player", ""),
                     "tag": player.get("tag", ""),
@@ -1270,7 +1261,6 @@ class WebApp:
         timeout = int(config.get("timeout_seconds", 15) or 15)
         known = build_icons2_known_map(self.brawlers)
 
-        print(f"[WEBAPP][PLAYER] Loading player data for tag={player_tag or '<empty>'}")
         player = fetch_brawltracker_player(player_tag, timeout=timeout)
 
         trophies = {}
@@ -1290,8 +1280,7 @@ class WebApp:
             else:
                 missed.append(api_brawler.get("name", ""))
         if missed:
-            print(f"[WEBAPP][PLAYER][WARN] Brawlers from site not found in local list: {missed}")
-        print(f"[WEBAPP][PLAYER] Result: player={player.get('name', '')}, trophies={len(trophies)}, source={player.get('source')}")
+            print(f"warning: brawlers from site not found in local list: {missed}")
         return {
             "player": player.get("name", ""),
             "tag": player.get("tag", player_tag),

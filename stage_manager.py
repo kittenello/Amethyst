@@ -81,7 +81,7 @@ class StageManager:
         self.starr_drop = None
         self.states = {
             'shop': self.quit_shop,
-            'brawler_selection': self.quit_shop,
+            'brawler_selection': self.quit_brawler_selection,
             'popup': self.close_pop_up,
             'match': lambda: 0,
             'match_making': lambda: self.window_controller.keys_up(list("wasd")),
@@ -439,9 +439,10 @@ class StageManager:
         for row in self.brawlers_pick_data:
             key = normalize_brawler_name(row.get("brawler", ""))
             refreshed_row = dict(row)
+            is_current = refreshed_row.get("brawler") == old_front_brawler
             if key in trophies_by_brawler:
                 api_trophies = trophies_by_brawler[key]
-                if refreshed_row.get("brawler") == old_front_brawler:
+                if is_current:
                     local_trophies = self._number_or_default(
                         getattr(self.Trophy_observer, "current_trophies", refreshed_row.get("trophies", 0)),
                         refreshed_row.get("trophies", 0),
@@ -450,7 +451,11 @@ class StageManager:
                 if refreshed_row.get("trophies") != api_trophies:
                     refreshed_row["trophies"] = api_trophies
                     changed = True
-            if self._number_or_default(refreshed_row.get("trophies", 0), 0) < target:
+            # Never remove the currently-active brawler here — target completion
+            # for the front brawler is handled exclusively by start_game()/end_game().
+            # Removing it here causes the next brawler to appear as "current" in
+            # notifications and trophies even though the task isn't finished yet.
+            if is_current or self._number_or_default(refreshed_row.get("trophies", 0), 0) < target:
                 refreshed_rows.append(refreshed_row)
 
         current_row = next(
@@ -508,10 +513,14 @@ class StageManager:
             self.last_auto_selected_queue_key = None
         self.brawlers_pick_data = refreshed_rows
 
-        current_trophies = self._number_or_default(self.brawlers_pick_data[0].get("trophies", 0), 0)
-        if getattr(self.Trophy_observer, "current_trophies", None) != current_trophies:
-            self.Trophy_observer.change_trophies(current_trophies)
-            changed = True
+        # Only sync Trophy_observer trophies from the refreshed row when the
+        # front brawler is unchanged — otherwise we'd overwrite the live trophy
+        # count for the currently-active brawler with a potentially stale API value.
+        if new_front == old_front:
+            current_trophies = self._number_or_default(self.brawlers_pick_data[0].get("trophies", 0), 0)
+            if getattr(self.Trophy_observer, "current_trophies", None) != current_trophies:
+                self.Trophy_observer.change_trophies(current_trophies)
+                changed = True
 
         if changed:
             if self.push_all_needs_selection:
@@ -986,11 +995,66 @@ class StageManager:
         if self.starr_drop is not None:
             self.starr_drop.force_active_for(60)
 
+        # Sync trophies from brawltracker 10 seconds after game ends (only for the brawler we just played)
+        _played_brawler = self.brawlers_pick_data[0]['brawler'] if self.brawlers_pick_data else None
+
+        def _sync_trophies_after_game(played_brawler=_played_brawler):
+            time.sleep(10)
+            if not played_brawler:
+                return
+            try:
+                player_data = self.fetch_push_all_player_data()
+                brawlers = player_data.get("brawlers", [])
+                if not brawlers:
+                    return
+                played_key = played_brawler.strip().lower()
+                api_match = next(
+                    (b for b in brawlers if b.get("name", "").strip().lower() == played_key),
+                    None
+                )
+                if api_match is None:
+                    return
+                new_trophies = int(api_match.get("trophies", 0) or 0)
+                row = next((r for r in self.brawlers_pick_data if r.get("brawler", "").strip().lower() == played_key), None)
+                if row is None:
+                    return
+                if row.get("trophies") != new_trophies:
+                    row["trophies"] = new_trophies
+                    from utils import save_brawler_data
+                    save_brawler_data(self.brawlers_pick_data)
+                    print(f"sync: {played_brawler} trophies updated to {new_trophies}.")
+                else:
+                    print(f"sync: {played_brawler} trophies unchanged {new_trophies}")
+            except Exception as e:
+                print(f"sync failed: {e}")
+
+        import threading
+        threading.Thread(target=_sync_trophies_after_game, daemon=True).start()
+
     def set_starr_drop(self, starr_drop_integration) -> None:
         self.starr_drop = starr_drop_integration
 
     def quit_shop(self):
         self.window_controller.click(100*self.window_controller.width_ratio, 60*self.window_controller.height_ratio)
+
+    def quit_brawler_selection(self):
+        """Close the brawler selection screen by clicking the back arrow in the top-left corner.
+
+        Previously this reused quit_shop (click at 100,60) which does not reliably
+        close the brawler picker — the bot would get stuck in a loop:
+        brawler_selection -> popup (team invite) -> shop -> brawler_selection -> ...
+        The back arrow region is at [0, 0, 175, 110] per lobby_config.toml, so we
+        click the centre of that region to navigate back to the lobby.
+        """
+        try:
+            region = self.lobby_config.get('template_matching', {}).get('go_back_arrow', [0, 0, 175, 110])
+            x = int((region[0] + region[2] / 2) * self.window_controller.width_ratio)
+            y = int((region[1] + region[3] / 2) * self.window_controller.height_ratio)
+        except Exception:
+            # Fallback: safe centre of back-arrow region
+            x = int(87 * self.window_controller.width_ratio)
+            y = int(55 * self.window_controller.height_ratio)
+        self.window_controller.click(x, y)
 
     def close_pop_up(self):
         screenshot = self.window_controller.screenshot()

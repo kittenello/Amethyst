@@ -10,6 +10,7 @@ import numpy as np
 from state_finder import get_state
 from detect import Detect, format_onnx_backend
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info
+from water_detect import WaterDetector
 
 brawl_stars_width, brawl_stars_height = 1920, 1080
 debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
@@ -431,6 +432,21 @@ class Movement:
 
 
 class Play(Movement):
+    WALL_IGNORE_ATTACK_OVERRIDE = {
+        "barley",
+        "dynamike",
+        "tick",
+        "sprout",
+        "grom",
+        "willow",
+        "hank",
+        "berry",
+        "shade",
+        "ziggy",
+        "sirius"
+    }
+
+    WALL_IGNORE_SUPER_OVERRIDE = set()
 
     def __init__(self, main_info_model, tile_detector_model, window_controller):
         super().__init__(window_controller)
@@ -444,6 +460,12 @@ class Play(Movement):
             tile_detector_model,
             classes=self.tile_detector_model_classes
         )
+
+        # Water detection — HSV colour-segmentation, no ONNX model needed
+        self.water_detection_enabled = str(bot_config.get("water_detection_enabled", "yes")).lower() in ("yes", "true", "1", "y", "on")
+        self.water_detector = WaterDetector() if self.water_detection_enabled else None
+        if self.water_detection_enabled:
+            print("[WaterDetect] Enabled (HSV-based, no ONNX).")
 
         self.time_since_movement = time.time()
         self.time_since_gadget_checked = time.time()
@@ -728,12 +750,19 @@ class Play(Movement):
 
     @staticmethod
     def can_attack_through_walls(brawler, skill_type, brawlers_info=None):
-        if not brawlers_info: brawlers_info = load_brawlers_info()
+        if skill_type == "attack":
+            if brawler in Play.WALL_IGNORE_ATTACK_OVERRIDE:
+                return True
+        elif skill_type == "super":
+            if brawler in Play.WALL_IGNORE_SUPER_OVERRIDE:
+                return True
+        else:
+            raise ValueError("skill_type must be either 'attack' or 'super'")
+        if not brawlers_info:
+            brawlers_info = load_brawlers_info()
         if skill_type == "attack":
             return brawlers_info[brawler]['ignore_walls_for_attacks']
-        elif skill_type == "super":
-            return brawlers_info[brawler]['ignore_walls_for_supers']
-        raise ValueError("skill_type must be either 'attack' or 'super'")
+        return brawlers_info[brawler]['ignore_walls_for_supers']
 
     @staticmethod
     def must_brawler_hold_attack(brawler, brawlers_info=None):
@@ -1808,8 +1837,23 @@ class Play(Movement):
             return True
         return False
 
-    def get_tile_data(self, frame):
+    def get_tile_data(self, frame, match_state=None):
         tile_data = self.Detect_tile_detector.detect_objects(frame, conf_tresh=self.wall_detection_confidence)
+
+        # Water detection via HSV colour segmentation (no ONNX required).
+        # Only runs during an active match to avoid false positives in menus/lobby.
+        # Water boxes are stored under the 'water' key AND merged into 'wall'
+        # so the existing pathfinding / avoidance logic treats them as solid obstacles.
+        if self.water_detection_enabled and self.water_detector is not None:
+            try:
+                water_boxes = self.water_detector.detect(frame, match_state=match_state)
+                tile_data['water'] = water_boxes
+                if water_boxes:
+                    tile_data['wall'] = tile_data.get('wall', []) + water_boxes
+            except Exception as _water_err:
+                if debug:
+                    print(f"[WaterDetect] Error during detection: {_water_err}")
+
         # Combine walls, barrels, and smoke as obstacles
         obstacles = tile_data.get('wall', []) + tile_data.get('barrel', []) + tile_data.get('smoke', [])
         tile_data['obstacles'] = obstacles
@@ -2026,7 +2070,7 @@ class Play(Movement):
         data = raw_data
         if self.should_detect_walls and current_time - self.time_since_walls_checked > self.walls_treshold:
 
-            tile_data = self.get_tile_data(frame)
+            tile_data = self.get_tile_data(frame, match_state=getattr(main, "state", None))
 
             walls = self.process_tile_data(tile_data)
 
@@ -2236,6 +2280,92 @@ class Play(Movement):
 
         cv2.imshow("Amethyst Visual Debug", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         cv2.waitKey(1)
+
+    def create_esp_debug_image(self, frame, data, brawler=None):
+        """Return an ESP-annotated RGB image without displaying it (for Telegram/web export)."""
+        import numpy as np
+        scale = self.visual_debug_scale
+        if scale < 0.999:
+            img = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        else:
+            img = frame.copy() if isinstance(frame, np.ndarray) else np.array(frame)
+
+        def s(value):
+            return int(value * scale)
+
+        def sp(point):
+            return s(point[0]), s(point[1])
+
+        # --- Fog overlay ---
+        if data.get("player"):
+            px, py = self.get_player_pos(data["player"][0])
+            r = self.fog_flee_distance
+            built = self._build_trusted_fog_mask(frame, roi_center=(px, py), roi_radius=r)
+            if built is not None:
+                mask, (ox, oy) = built
+                ys, xs = np.nonzero(mask)
+                if xs.size > 0:
+                    dx_all = (xs + ox) - px
+                    dy_all = (ys + oy) - py
+                    dist_sq = dx_all * dx_all + dy_all * dy_all
+                    inside = dist_sq <= r * r
+                    if int(inside.sum()) >= self.fog_min_pixels_in_radius:
+                        roi_mask = np.zeros_like(mask)
+                        roi_mask[ys[inside], xs[inside]] = 255
+                        if scale < 0.999:
+                            roi_mask = cv2.resize(roi_mask, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+                        x0, y0 = s(ox), s(oy)
+                        x1 = min(img.shape[1], x0 + roi_mask.shape[1])
+                        y1 = min(img.shape[0], y0 + roi_mask.shape[0])
+                        roi_mask = roi_mask[:max(0, y1 - y0), :max(0, x1 - x0)]
+                        if roi_mask.size:
+                            roi = img[y0:y1, x0:x1]
+                            magenta = np.empty_like(roi)
+                            magenta[:, :] = (255, 0, 255)
+                            blended = cv2.addWeighted(roi, 0.55, magenta, 0.45, 0)
+                            roi[roi_mask > 0] = blended[roi_mask > 0]
+                        fog_cx = int(dx_all[inside].mean() + px)
+                        fog_cy = int(dy_all[inside].mean() + py)
+                        cv2.circle(img, sp((fog_cx, fog_cy)), max(3, s(8)), (255, 0, 255), -1)
+                        cv2.putText(img, "fog", sp((fog_cx + 10, fog_cy)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, max(0.35, 0.6 * scale), (255, 0, 255), 2)
+                        cv2.arrowedLine(img, sp((px, py)), sp((fog_cx, fog_cy)),
+                                        (255, 0, 255), 2, tipLength=0.15)
+
+        colors = {
+            "player":   (0, 255, 0),
+            "teammate": (0, 0, 255),
+            "enemy":    (255, 0, 0),
+            "wall":     (128, 128, 128),
+        }
+        boxes_drawn = 0
+        for key, color in colors.items():
+            boxes = data.get(key)
+            if not boxes:
+                continue
+            for box in boxes:
+                if boxes_drawn >= self.visual_debug_max_boxes:
+                    break
+                x1, y1, x2, y2 = map(int, box)
+                cv2.rectangle(img, sp((x1, y1)), sp((x2, y2)), color, max(1, s(2)))
+                if key != "wall":
+                    cv2.putText(img, key, sp((x1, max(y1 - 6, 0))),
+                                cv2.FONT_HERSHEY_SIMPLEX, max(0.35, 0.5 * scale), color, 1)
+                boxes_drawn += 1
+
+        if brawler and data.get("player"):
+            info = self.brawlers_info.get(brawler)
+            if info:
+                px, py = self.get_player_pos(data["player"][0])
+                center = sp((px, py))
+                attack_range = s(int(info.get("attack_range", 0)))
+                super_range = s(int(info.get("super_range", 0)))
+                if attack_range > 0:
+                    cv2.circle(img, center, attack_range, (160, 32, 240), 2)
+                if super_range > 0:
+                    cv2.circle(img, center, super_range, (255, 255, 0), 2)
+
+        return img
 
     @staticmethod
     def movement_to_direction(movement):

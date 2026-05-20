@@ -37,3 +37,4 @@ starr_drop_detect = true
 starr_drop_threshold = 0.6
 starr_drop_post_tap_delay = 7
 starr_drop_post_hold_delay = 10
+window_controller_fix = 0

@@ -40,8 +40,19 @@ from utils import (
     update_wall_model_classes,
 )
 from webapp import WebApp
-from window_controller import WindowController
 from starr_drop import StarrDropIntegration
+
+_general_cfg = load_toml_as_dict("cfg/general_config.toml")
+if int(_general_cfg.get("window_controller_fix", 0)) == 1:
+    import importlib.util as _ilu, pathlib as _pl
+    _spec = _ilu.spec_from_file_location("window_controller_fix", _pl.Path(__file__).parent / "window_controller_fix.py")
+    _wc_mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_wc_mod)
+    WindowController = _wc_mod.WindowController
+    print("using fix")
+else:
+    from window_controller import WindowController
+    print("no fix")
 
 if platform.architecture()[0] != "64bit":
     print("\nWARNING: Amethyst is running on 32-bit Python.")

@@ -531,16 +531,17 @@ function renderSettings() {
     starrDropDetectRow(generalData.starr_drop_detect),
   ].join("");
 
-  // Right column: original general settings (minus starr_drop_detect) + bot + timers
+  // Right column: original general settings (minus starr_drop_detect, window_controller_fix) + bot + timers
   const groups = [
-    ["general", "Settings", Object.fromEntries(Object.entries(generalData).filter(([k]) => k !== "starr_drop_detect"))],
+    ["general", "Settings", Object.fromEntries(Object.entries(generalData).filter(([k]) => k !== "starr_drop_detect" && k !== "window_controller_fix"))],
     ["bot", "Detection", state.settings.bot],
     ["timers", "Timers", pick(state.settings.timers, ["super", "hypercharge", "gadget", "wall_detection", "no_detection_proceed"])]
   ];
 
   const leftCol = `<div class="setting-group"><div class="eyebrow">GENERAL</div>${generalRows}</div>`;
   const rightCols = groups.map(([section, title, data]) => {
-    const rows = Object.entries(data).map(([key, value]) => settingRow(section, key, value)).join("");
+    let rows = Object.entries(data).map(([key, value]) => settingRow(section, key, value)).join("");
+    if (section === "general") rows += windowControllerFixRow(generalData.window_controller_fix ?? 0);
     return `<div class="setting-group"><div class="eyebrow">${title.toUpperCase()}</div>${rows}</div>`;
   }).join("");
 
@@ -569,6 +570,13 @@ function starrDropDetectRow(value) {
       <button class="sd-dots-btn" onclick="openStarrDropSettings()" title="Configure Starr Drop settings">&#8942;</button>
       <input data-setting="general:starr_drop_detect" type="checkbox" ${value ? "checked" : ""}>
     </div>
+  </div>`;
+}
+
+function windowControllerFixRow(value) {
+  return `<div class="setting">
+    <div><b>Window Controller</b><p>0 - no fix, 1 - fix. You need restart bot to apply changes.</p><p style="color:var(--text-muted,#888);font-size:0.85em;margin-top:2px;"></p></div>
+    <input data-setting="general:window_controller_fix" class="input" type="number" min="0" max="1" value="${value ?? 0}" onchange="saveSetting(event)">
   </div>`;
 }
 
@@ -901,15 +909,29 @@ async function loadPlayerData(silent = false) {
     $("playerTag").textContent = state.playerTag || "";
     $("playerTagInput").value = state.playerTag || $("playerTagInput").value || "";
 
+    let queueUpdated = 0;
     for (const b of state.brawlers || []) {
       const trophies = trophyFor(b);
       if (trophies === undefined) continue;
       const existing = state.queue.find(q => q.brawler === b.id);
-      if (existing) existing.trophies = trophies;
+      if (existing && existing.trophies !== trophies) {
+        existing.trophies = trophies;
+        queueUpdated++;
+      }
+    }
+
+    if (queueUpdated > 0 && state.queue.length > 0) {
+      try {
+        const res = await api("/api/queue/bulk", { method: "POST", body: JSON.stringify({ queue: state.queue }) });
+        if (res && res.queue) state.queue = res.queue;
+        console.log(`[WEBAPP][PLAYER] Queue trophies synced: ${queueUpdated} brawler(s) updated.`);
+      } catch (e) {
+        console.warn("[WEBAPP][PLAYER] Queue trophy sync failed:", e);
+      }
     }
 
     const count = Object.keys(playerTrophies).length;
-    if ($("playerLoadStatus")) $("playerLoadStatus").textContent = `Synced ${Math.floor(count / 2) || count} brawlers. Player: ${playerName}`;
+    if ($("playerLoadStatus")) $("playerLoadStatus").textContent = `Synced ${Math.floor(count / 2) || count} brawlers. Player: ${playerName}${queueUpdated > 0 ? ` · ${queueUpdated} queue trophy update${queueUpdated === 1 ? "" : "s"}` : ""}`;
     renderBrawlers();
     renderBrawlerEditor();
     renderQueue();
