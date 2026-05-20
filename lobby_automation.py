@@ -138,14 +138,15 @@ class LobbyAutomation:
             if c == 0:
                 wr = self.window_controller.width_ratio
                 hr = self.window_controller.height_ratio
-                # координаты свайпа подобраны вручную через coordinate_picker (было 1700, случайно тапало на бравлера)
-                self.window_controller.swipe(int(1794 * wr), int(900 * hr), int(1794 * wr), int(746 * hr), duration=0.3)  # было 0.8 — слишком медленно
-                c += 1
-                continue
 
-            # координаты свайпа подобраны вручную через coordinate_picker (было 1700, случайно тапало на бравлера)
-            self.window_controller.swipe(int(1794 * wr), int(900 * hr), int(1794 * wr), int(746 * hr), duration=0.3)  # было 0.8 — слишком медленно
-            time.sleep(1)
+            scroll_x = int(1794 * wr)
+            scroll_y_start = int(900 * hr)
+            scroll_y_end = int(600 * hr)
+            self.window_controller.swipe(scroll_x, scroll_y_start, scroll_x, scroll_y_end, duration=0.45)
+            time.sleep(0.15 if c == 0 else 0.8)
+            c += 1
+            if c == 1:
+                continue
 
         if not found_brawler:
             print(f"WARNING: Brawler '{brawler}' was not found after 50 scroll attempts. ")
@@ -230,7 +231,7 @@ class LobbyAutomation:
         if best_loc is None or best_size is None:
             return None
 
-        threshold = 0.7
+        threshold = 0.58
         if best_score < threshold:
             return None
 

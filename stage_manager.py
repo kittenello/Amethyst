@@ -713,8 +713,6 @@ class StageManager:
         print(f"{drop_type.title()} star drop detected; opening with Q.")
         self.window_controller.keys_up(list("wasd"))
 
-        # Starr drops are opened by the attack/action button. Using Q is more
-        # reliable across LDPlayer instances than tapping fixed screen coords.
         long_press_types = ("angelic", "demonic", "starr_nova")
         attempts = 4 if drop_type in long_press_types else 6
         hold_time = 0.35 if drop_type in long_press_types else 0.06
@@ -748,11 +746,32 @@ class StageManager:
             self.brawlers_pick_data[0]["trophies"] = lobby_trophies
             save_brawler_data(self.brawlers_pick_data)
 
-        if lobby_trophies is None:
-            print("Could not read lobby trophies after prestige; trusting confirmed prestige reward screen.")
-        elif lobby_trophies > 20:
-            print("Reward screen did not confirm a 1k trophy reset; not forcing brawler switch.")
-            return
+        local_trophies = self.Trophy_observer.current_trophies
+
+        if lobby_trophies is not None:
+            if lobby_trophies > 20:
+                print(
+                    f"Reward screen did not confirm a 1k trophy reset "
+                    f"(lobby trophies={lobby_trophies}); not forcing brawler switch."
+                )
+                return
+            print(f"Lobby trophies after prestige reward: {lobby_trophies} — confirmed 1k reset.")
+        else:
+            target = self._number_or_default(
+                self.brawlers_pick_data[0].get("push_until", 1000) if self.brawlers_pick_data else 1000,
+                1000,
+            )
+            if local_trophies < target:
+                print(
+                    f"Could not read lobby trophies after prestige; "
+                    f"local trophies={local_trophies} < target={target}. "
+                    f"Brawler has NOT reached {target} yet — skipping brawler switch."
+                )
+                return
+            print(
+                f"Could not read lobby trophies after prestige; "
+                f"local trophies={local_trophies} >= target={target} — proceeding with brawler switch."
+            )
 
         if not self.advance_to_next_brawler_after_prestige():
             self.window_controller.press_key("Q")
@@ -761,10 +780,6 @@ class StageManager:
         if not self.select_current_queue_brawler("Prestige reward queued brawler selection"):
             print("Could not switch after prestige reward; delaying next match start.")
             self.window_controller.keys_up(list("wasd"))
-
-    # ------------------------------------------------------------------ #
-    # Play Again helpers (ported from rc fork)                             #
-    # ------------------------------------------------------------------ #
 
     def should_use_play_again(self, value=0, target=0):
         if self.post_match_action != "play_again":
@@ -950,11 +965,9 @@ class StageManager:
                 )
                 value = self._number_or_default(value, 0)
 
-                # Determine whether to click Play Again or go back to lobby.
                 use_play_again = self.should_use_play_again(value, push_current_brawler_till)
 
                 if value >= push_current_brawler_till:
-                    # Target reached — always go back to lobby regardless of play_again mode.
                     use_play_again = False
                     if len(self.brawlers_pick_data) <= 1:
                         print(
@@ -980,10 +993,6 @@ class StageManager:
                             push_current_brawler_till,
                         )
 
-            # Keep pressing the dismiss key on every iteration until the
-            # end-of-match screens give way. One press is rarely enough in
-            # showdown: after the place screen there can be star drops,
-            # trophy rewards, and offers to dismiss.
             self.dismiss_end_screen(use_play_again=use_play_again)
             button_pressed = True
 
@@ -995,7 +1004,6 @@ class StageManager:
         if self.starr_drop is not None:
             self.starr_drop.force_active_for(60)
 
-        # Sync trophies from brawltracker 10 seconds after game ends (only for the brawler we just played)
         _played_brawler = self.brawlers_pick_data[0]['brawler'] if self.brawlers_pick_data else None
 
         def _sync_trophies_after_game(played_brawler=_played_brawler):
