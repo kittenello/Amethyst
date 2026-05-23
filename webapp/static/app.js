@@ -1,7 +1,6 @@
 let state = null;
 let selectedBrawler = null;
 let selectedType = "trophies";
-let selectedPlaystyle = "";
 let historySort = "matches";
 let playerTrophies = {};
 let playerPowers = {};
@@ -69,7 +68,6 @@ async function init() {
   state = await api("/api/state");
   console.log("[WEBAPP][STATE]", state);
   
-  selectedPlaystyle = state.currentPlaystyle || "";
   botRunning = state.runtime?.running || false;
   
   console.log("[WEBAPP] Initial botRunning state:", botRunning);
@@ -222,7 +220,6 @@ function renderAll() {
   if ($("playerLoadStatus")) $("playerLoadStatus").textContent = state.playerTag ? "Will auto-load player data..." : "Write Player Tag and click Sync Player.";
   renderDashboard();
   renderBrawlers();
-  renderPlaystyles();
   renderHistory();
   renderLogging();
   renderSettings();
@@ -250,7 +247,6 @@ function switchView(view) {
     dashboard: "Dashboard",
     multi: "Multi-Instance", 
     brawlers: "Brawlers",
-    playstyles: "Playstyles",
     history: "History",
     logging: "Logging",
     settings: "Settings"
@@ -259,8 +255,7 @@ function switchView(view) {
 }
 
 function renderDashboard() {
-  const play = currentPlaystyleMeta();
-  $("activePlaystyle").innerHTML = play ? playstyleMarkup(play, "ACTIVE PLAYSTYLE") : `<div class="eyebrow">ACTIVE PLAYSTYLE</div><h2>No playstyle selected</h2><p>Pick one in Playstyles before starting.</p>`;
+  
   renderRuntimePanel();
 }
 
@@ -272,17 +267,53 @@ function renderRuntimePanel() {
   const progressTarget = Number(current.push_until ?? 0);
   const percent = progressTarget > 0 ? Math.max(0, Math.min(100, Math.round(progressCurrent * 100 / progressTarget))) : 0;
   const currentId = runtime.currentBrawler && runtime.currentBrawler !== "none" ? runtime.currentBrawler : current.brawler;
-  const currentName = currentId ? nameOf(currentId) : "none";
-  const playstyle = currentPlaystyleMeta()?.name || "none";
+  const currentName = currentId ? nameOf(currentId) : "—";
+  const stateVal = runtime.state || (botRunning ? "running" : "idle");
+  const stateClass = stateVal === "running" ? "state-running" : "state-idle";
+
+  const queueSlice = (state.queue || []).slice(0, 9);
+  const queueIconsHtml = queueSlice.length
+    ? queueSlice.map(q =>
+        `<img src="/assets/brawler_icons2/${q.brawler}.png" title="${nameOf(q.brawler)}" onerror="this.style.opacity='0'">`
+      ).join("")
+    : `<span style="color:#7a6899;font-size:12px;">No queue</span>`;
+
   $("runtimePanel").innerHTML = `
-    <div class="session-cards">
-      <div class="metric wide-metric"><small>ACTIVE SESSION</small><b>${currentName} / ${metricKey}</b><div class="progress"><span style="width:${percent}%"></span></div><strong>${progressCurrent} / ${progressTarget || 0}</strong></div>
-      <div class="metric"><small>CURRENT BRAWLER</small><b>${currentName}</b></div>
-      <div class="metric"><small>STATE</small><b>${runtime.state || (botRunning ? "running" : "idle")}</b></div>
-      <div class="metric"><small>IPS</small><b>${runtime.ips ?? "0.0"}</b></div>
-      <div class="metric"><small>PLAYSTYLE</small><b>${playstyle}</b></div>
+    <div class="session-brawler-hero">
+      <img src="/assets/brawler_icons2/${currentId || '__none__'}.png"
+           onerror="this.classList.add('hidden-icon')">
+      <div class="session-brawler-info">
+        <div class="eyebrow">ACTIVE SESSION</div>
+        <h3>${currentName}</h3>
+        <div class="session-progress-wrap">
+          <div class="session-progress-label"><span>${metricKey}</span><span>${progressCurrent} / ${progressTarget || 0}</span></div>
+          <div class="session-progress-bar"><span style="width:${percent}%"></span></div>
+        </div>
+      </div>
     </div>
-  `
+    <div class="session-metrics">
+      <div class="session-metric-cell">
+        <small>CURRENT BRAWLER</small>
+        <b>${currentName}</b>
+      </div>
+      <div class="session-metric-cell ${stateClass}">
+        <small>STATE</small>
+        <b>${stateVal}</b>
+      </div>
+      <div class="session-metric-cell">
+        <small>PROGRESS</small>
+        <b>${percent}%</b>
+      </div>
+      <div class="session-metric-cell">
+        <small>IPS</small>
+        <b>${runtime.ips ?? "0.0"}</b>
+      </div>
+    </div>
+    <div class="session-icons-row">
+      <span class="eyebrow">QUEUE</span>
+      <div class="session-queue-icons">${queueIconsHtml}</div>
+    </div>
+  `;
 }
 
 function renderBrawlers() {
@@ -459,49 +490,9 @@ function closePushAllModal() {
   }
 }
 
-function renderPlaystyles() {
-  const query = ($("playstyleSearch").value || "").toLowerCase();
-  $("selectedPlaystyle").innerHTML = currentPlaystyleMeta() ? playstyleMarkup(currentPlaystyleMeta()) : "Drag one playstyle here";
-  $("playstyleGrid").innerHTML = state.playstyles
-    .filter(p => `${p.name} ${p.description} ${p.gamemodes?.join(" ")}`.toLowerCase().includes(query))
-    .map(p => `<div class="playstyle-card ${selectedPlaystyle === p.file ? "active" : ""}" draggable="true" data-playstyle="${p.file}"><button class="dots" data-menu="${p.file}" aria-label="Playstyle menu">...</button>${playstyleMarkup(p)}<div class="playstyle-menu" data-menu-panel="${p.file}"><button data-delete-playstyle="${p.file}">Delete playstyle</button></div></div>`)
-    .join("");
-  document.querySelectorAll("[data-playstyle]").forEach(card => {
-    card.ondragstart = ev => ev.dataTransfer.setData("text/plain", card.dataset.playstyle);
-    card.onclick = (ev) => {
-      if (ev.target.closest(".dots") || ev.target.closest(".playstyle-menu")) return;
-      selectPlaystyle(card.dataset.playstyle);
-    };
-  });
-  document.querySelectorAll("[data-menu]").forEach(btn => btn.onclick = (ev) => {
-    ev.stopPropagation();
-    const file = btn.dataset.menu;
-    document.querySelectorAll(".playstyle-menu").forEach(menu => {
-      menu.classList.toggle("open", menu.dataset.menuPanel === file && !menu.classList.contains("open"));
-    });
-  });
-  document.querySelectorAll("[data-delete-playstyle]").forEach(btn => btn.onclick = (ev) => {
-    ev.stopPropagation();
-    deletePlaystyle(btn.dataset.deletePlaystyle);
-  });
-}
 
-function playstyleMarkup(p, eyebrow = "") {
-  const modes = (p.gamemodes || ["all"]).map(m => `<span class="tag">${String(m).replace("_", " ")}</span>`).join("");
-  return `${eyebrow ? `<div class="eyebrow">${eyebrow}</div>` : ""}<h2>${p.name}</h2><p>${p.author || "Official"} ${p.date ? "| " + p.date : ""}</p><p>${p.description || ""}</p><div class="mode-tags">${modes}</div>`;
-}
 
-function currentPlaystyleMeta() {
-  return state.playstyles.find(p => p.file === selectedPlaystyle);
-}
 
-function selectPlaystyle(file) {
-  selectedPlaystyle = file;
-  state.currentPlaystyle = file;
-  renderPlaystyles();
-  renderDashboard();
-  updateStartState();
-}
 
 function renderHistory() {
   const totals = state.history.total;
@@ -733,7 +724,7 @@ function renderQueue() {
 }
 
 async function updateStartState(updatePanel = true) {
-  const ready = state.queue.length > 0 && selectedPlaystyle;
+  const ready = state.queue.length > 0;
   
   try {
     // Always get fresh state from server
@@ -748,7 +739,7 @@ async function updateStartState(updatePanel = true) {
     // Update button based on server state
     $("startBtn").disabled = !ready && !isRunning;
     $("startBtn").querySelector("span").textContent = isRunning ? "STOP" : "START";
-    $("startHint").textContent = isRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler and a playstyle before starting.";
+    $("startHint").textContent = isRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler queue before starting.";
     
     if (updatePanel) renderRuntimePanel();
   } catch (e) {
@@ -756,7 +747,7 @@ async function updateStartState(updatePanel = true) {
     // Fallback to local state
     $("startBtn").disabled = !ready && !botRunning;
     $("startBtn").querySelector("span").textContent = botRunning ? "STOP" : "START";
-    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler and a playstyle before starting.";
+    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler queue before starting.";
     
     if (updatePanel) renderRuntimePanel();
   }
@@ -783,7 +774,7 @@ async function startBot() {
       $("startBtn").disabled = true;
       $("startBtn").querySelector("span").textContent = "STARTING";
       
-      await api("/api/start", { method: "POST", body: JSON.stringify({ queue: state.queue, playstyle: selectedPlaystyle }) });
+      await api("/api/start", { method: "POST", body: JSON.stringify({ queue: state.queue }) });
       console.log("[WEBAPP] Bot start command sent");
       botRunning = true;
       $("startBtn").disabled = false;
@@ -818,61 +809,27 @@ async function refreshRuntime() {
     
     renderRuntimePanel();
     // Update button to match server state
-    const ready = state.queue.length > 0 && selectedPlaystyle;
+    const ready = state.queue.length > 0;
     $("startBtn").disabled = !ready && !botRunning;
     $("startBtn").querySelector("span").textContent = botRunning ? "STOP" : "START";
-    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler and a playstyle before starting.";
+    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler queue before starting.";
   } catch (e) {
     console.error("[WEBAPP] Error in refreshRuntime:", e);
   }
 }
 
-async function importPlaystyleFile(file) {
-  if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".pyla")) {
-    alert("Only .pyla files can be imported.");
-    return;
-  }
-  const content = await file.text();
-  const res = await api("/api/playstyles/import", {
-    method: "POST",
-    body: JSON.stringify({ filename: file.name, content })
-  });
-  state.playstyles = res.playstyles;
-  selectPlaystyle(res.file);
-}
 
-async function deletePlaystyle(file) {
-  const res = await api("/api/playstyles/delete", {
-    method: "POST",
-    body: JSON.stringify({ filename: file })
-  });
-  state.playstyles = res.playstyles;
-  if (selectedPlaystyle === file) {
-    selectedPlaystyle = state.playstyles[0]?.file || "";
-    state.currentPlaystyle = selectedPlaystyle;
-  }
-  renderPlaystyles();
-  renderDashboard();
-  updateStartState();
-}
 
 document.addEventListener("click", ev => {
   const nav = ev.target.closest("[data-view]");
   if (nav) switchView(nav.dataset.view);
-  if (!ev.target.closest(".playstyle-card")) {
-    document.querySelectorAll(".playstyle-menu").forEach(menu => menu.classList.remove("open"));
-  }
 });
 $("startBtn").onclick = startBot;
 $("brawlerSearch").oninput = renderBrawlers;
-$("playstyleSearch").oninput = renderPlaystyles;
 $("historySearch").oninput = renderHistory;
 document.querySelectorAll("[data-sort]").forEach(btn => btn.onclick = () => { historySort = btn.dataset.sort; document.querySelectorAll("[data-sort]").forEach(b => b.classList.toggle("active", b === btn)); renderHistory(); });
-$("selectedPlaystyle").ondragover = ev => ev.preventDefault();
-$("selectedPlaystyle").ondrop = ev => { ev.preventDefault(); selectPlaystyle(ev.dataTransfer.getData("text/plain")); };
-$("importPlaystyle").onclick = () => $("playstyleFile").click();
-$("playstyleFile").onchange = ev => importPlaystyleFile(ev.target.files[0]);
+
+
 $("clearQueue").onclick = async () => {
   if (brawlersMultiMode) {
     state.queue = [];
@@ -1176,7 +1133,6 @@ window.addEventListener('beforeunload', () => {
     localStorage.setItem('amergency.lastState', JSON.stringify({
       timestamp: Date.now(),
       botRunning: botRunning,
-      selectedPlaystyle: selectedPlaystyle,
       queue: state?.queue || []
     }));
   } catch (e) {

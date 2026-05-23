@@ -356,7 +356,6 @@ def get_ocr_reader():
     if backend in ("auto", "tesseract", "tess"):
         try:
             reader = TesseractOCR(tesseract_cmd)
-            print("Using Tesseract OCR backend for brawler name selection.")
             return reader
         except Exception as e:
             _ocr_init_error = str(e)
@@ -410,9 +409,6 @@ def save_brawler_data(data):
 
 
 def normalize_brawler_name(name):
-    # Site HTML can return entities in different forms, for example
-    # "LARRY &amp; LAWRIE" or even "Larry &Amp; Lawrie". Decode them
-    # before matching against local ids like "larrylawrie".
     value = str(name or "")
     value = re.sub(r"&amp;", "&", value, flags=re.IGNORECASE)
     value = html.unescape(value)

@@ -49,10 +49,8 @@ if int(_general_cfg.get("window_controller_fix", 0)) == 1:
     _wc_mod = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_wc_mod)
     WindowController = _wc_mod.WindowController
-    print("using fix")
 else:
     from window_controller import WindowController
-    print("no fix")
 
 if platform.architecture()[0] != "64bit":
     print("\nWARNING: Amethyst is running on 32-bit Python.")
@@ -181,16 +179,21 @@ def pyla_main(data):
                 print(f"Picking brawler automatically before first match: {first_brawler}")
                 selection_method = first_row.get('selection_method', 'named_brawler')
                 try:
+                    picked = False
                     if first_brawler:
                         # The queue order already encodes lowest/highest trophy sorting.
                         # In game we must pick the exact first queued brawler, not the
                         # first card after opening the Brawl Stars sort menu.
-                        if not self.lobby_automator.select_brawler(first_brawler):
+                        picked = self.lobby_automator.select_brawler(first_brawler)
+                        if not picked:
                             print("Initial auto-pick did not confirm the selected brawler; the stage manager will retry from lobby.")
                     elif selection_method == 'lowest_trophies':
                         # Backward-compatible fallback for legacy queue rows without a name.
-                        if not self.lobby_automator.select_lowest_trophy_brawler():
+                        picked = self.lobby_automator.select_lowest_trophy_brawler()
+                        if not picked:
                             print("Initial lowest-trophy auto-pick did not confirm lobby; the stage manager will retry.")
+                    if picked:
+                        self.Stage_manager.last_auto_selected_queue_key = self.Stage_manager._current_queue_key()
                 except Exception as e:
                     print(f"Initial auto-pick failed: {e}. The stage manager will retry from lobby.")
             self.Play.current_brawler = first_row.get('brawler', 'none')
@@ -207,13 +210,6 @@ def pyla_main(data):
             self.last_ignored_star_drop_state_time = 0.0
             general_config = load_toml_as_dict("cfg/general_config.toml")
             self.max_ips = parse_max_ips(general_config.get('max_ips', 0))
-            print(
-                "Performance config:",
-                f"max_ips={self.max_ips if self.max_ips is not None else 'unlimited'}",
-                f"scrcpy_max_fps={general_config.get('scrcpy_max_fps', 'default')}",
-                f"scrcpy_max_width={general_config.get('scrcpy_max_width', 'default')}",
-                f"onnx_cpu_threads={general_config.get('onnx_cpu_threads', 'auto')}",
-            )
             self.visual_debug = load_toml_as_dict("cfg/general_config.toml").get('visual_debug', 'no') == "yes"
             self.run_for_minutes = int(load_toml_as_dict("cfg/general_config.toml")['run_for_minutes'])
             self.start_time = time.time()

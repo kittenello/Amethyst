@@ -4,8 +4,6 @@ import sys
 import traceback
 from pathlib import Path
 
-# This file is launched from .multi_instances/instance_N.
-# It intentionally runs only the bot core, without starting another WebApp.
 ROOT = Path(__file__).resolve().parent
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))

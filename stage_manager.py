@@ -55,7 +55,6 @@ class StageManager:
         adaptive_enabled = str(bot_config.get("adaptive_brain_enabled", "yes")).lower() in ("yes", "true", "1")
         adaptive_window = int(bot_config.get("adaptive_brain_window", 20))
         self.adaptive_brain = AdaptiveBrain(enabled=adaptive_enabled, window_size=adaptive_window)
-        print(self.adaptive_brain.summary())
         self.post_match_action = str(bot_config.get("post_match_action", "lobby")).strip().lower()
         if self.post_match_action not in ("lobby", "play_again"):
             self.post_match_action = "lobby"
@@ -621,6 +620,7 @@ class StageManager:
                         print("Could not confirm the next brawler selection reached lobby; delaying match start.")
                         self.window_controller.keys_up(list("wasd"))
                         return
+                    self.last_auto_selected_queue_key = self._current_queue_key()
             else:
                 print("Next brawler is in manual mode, waiting 10 seconds to let user switch.")
 
@@ -631,6 +631,7 @@ class StageManager:
                 print("Could not confirm the API-refreshed brawler selection reached lobby; delaying match start.")
                 self.window_controller.keys_up(list("wasd"))
                 return
+            self.last_auto_selected_queue_key = self._current_queue_key()
 
         if not self.auto_select_current_brawler_if_needed():
             return 0
@@ -1003,41 +1004,6 @@ class StageManager:
         print("Game has ended", current_state)
         if self.starr_drop is not None:
             self.starr_drop.force_active_for(60)
-
-        _played_brawler = self.brawlers_pick_data[0]['brawler'] if self.brawlers_pick_data else None
-
-        def _sync_trophies_after_game(played_brawler=_played_brawler):
-            time.sleep(10)
-            if not played_brawler:
-                return
-            try:
-                player_data = self.fetch_push_all_player_data()
-                brawlers = player_data.get("brawlers", [])
-                if not brawlers:
-                    return
-                played_key = played_brawler.strip().lower()
-                api_match = next(
-                    (b for b in brawlers if b.get("name", "").strip().lower() == played_key),
-                    None
-                )
-                if api_match is None:
-                    return
-                new_trophies = int(api_match.get("trophies", 0) or 0)
-                row = next((r for r in self.brawlers_pick_data if r.get("brawler", "").strip().lower() == played_key), None)
-                if row is None:
-                    return
-                if row.get("trophies") != new_trophies:
-                    row["trophies"] = new_trophies
-                    from utils import save_brawler_data
-                    save_brawler_data(self.brawlers_pick_data)
-                    print(f"sync: {played_brawler} trophies updated to {new_trophies}.")
-                else:
-                    print(f"sync: {played_brawler} trophies unchanged {new_trophies}")
-            except Exception as e:
-                print(f"sync failed: {e}")
-
-        import threading
-        threading.Thread(target=_sync_trophies_after_game, daemon=True).start()
 
     def set_starr_drop(self, starr_drop_integration) -> None:
         self.starr_drop = starr_drop_integration

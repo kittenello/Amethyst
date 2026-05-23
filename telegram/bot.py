@@ -39,7 +39,7 @@ COMMANDS_TEXT = (
     "/status — текущий статус\n"
     "/stats — подробная статистика\n"
     "/screen — скриншот текущего экрана\n"
-    "/debug — ESP-отладочный скриншот\n"
+    "/debug — ESP скриншот\n"
     "/queue — показать текущую очередь\n"
     "/queuecreate <brawler> <trophies> — добавить в очередь\n"
     "/queuedelete <brawler> — удалить из очереди\n"
@@ -329,7 +329,7 @@ async def set_bot_commands():
         BotCommand(command="/stats", description="подробная статистика"),
         BotCommand(command="/screen", description="скриншот экрана"),
         BotCommand(command="/debug", description="ESP скриншот"),
-        BotCommand(command="/queue", description="Показать очередь"),
+        BotCommand(command="/queue", description="показать очередь"),
         BotCommand(command="/queuecreate", description="добавить бойца в очередь"),
         BotCommand(command="/queuedelete", description="удалить бойца из очереди"),
         BotCommand(command="/queueclear", description="очистить очередь"),

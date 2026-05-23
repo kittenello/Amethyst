@@ -76,7 +76,7 @@ body::after {
 button, input { font: inherit; }
 .sidebar { position: fixed; inset: 0 auto 0 0; width: 224px; background: #0b0712; border-right: 1px solid #2d2140; display: flex; flex-direction: column; }
 .brand { height: 82px; display: flex; align-items: center; gap: 12px; padding: 0 22px; border-bottom: 1px solid #2d2140; font-size: 25px; font-weight: 900; }
-.logo { width: 34px; height: 34px; display: grid; place-items: center; background: linear-gradient(135deg, #241236, #5d174d); border: 1px solid #7c3ca8; box-shadow: 0 0 24px rgba(215,92,255,.38); }
+.logo-img { width: 36px; height: 36px; object-fit: contain; filter: drop-shadow(0 0 8px rgba(215,92,255,.6)); }
 nav { padding: 18px 12px; display: grid; gap: 7px; }
 .nav { 
   height: 44px; 
@@ -152,6 +152,66 @@ button.pill { cursor: pointer; color: white; }
 .grid { display: grid; gap: 24px; }
 .two { grid-template-columns: minmax(0, 1fr) minmax(360px, 1fr); }
 .brawler-layout { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+
+/* Dashboard top: START left, session right */
+.dashboard-top { display: grid; grid-template-columns: 420px 1fr; gap: 20px; align-items: stretch; }
+
+/* Session side panel */
+.session-side-panel {
+  border-color: rgba(215,92,255,.38);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.session-brawler-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 22px 16px;
+  background: linear-gradient(135deg, rgba(215,92,255,.14) 0%, rgba(18,13,29,.0) 60%);
+  border-bottom: 1px solid rgba(215,92,255,.18);
+}
+.session-brawler-hero img {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: rgba(215,92,255,.1);
+  border: 1px solid rgba(215,92,255,.22);
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 12px rgba(215,92,255,.35));
+}
+.session-brawler-hero img.hidden-icon { visibility: hidden; }
+.session-brawler-info { flex: 1; min-width: 0; }
+.session-brawler-info .eyebrow { color: #bdaed2; font-size: 10px; letter-spacing: 1.5px; margin-bottom: 4px; }
+.session-brawler-info h3 { font-size: 22px; font-weight: 800; color: #fff; margin: 0 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-progress-wrap { margin: 0; }
+.session-progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #bdaed2; margin-bottom: 5px; }
+.session-progress-bar { height: 6px; background: #2d1f3b; border-radius: 99px; overflow: hidden; }
+.session-progress-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--hot), var(--red)); border-radius: inherit; transition: width .6s ease; }
+.session-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: rgba(215,92,255,.1); flex: 1; }
+.session-metric-cell { padding: 14px 18px; background: rgba(18,13,29,.85); display: flex; flex-direction: column; gap: 4px; }
+.session-metric-cell small { color: #9880b2; font-size: 10px; letter-spacing: 1.2px; }
+.session-metric-cell b { font-size: 18px; font-weight: 700; color: #e8dcf8; }
+.session-metric-cell.state-running b { color: #58f28a; }
+.session-metric-cell.state-idle b { color: #bdaed2; }
+.session-icons-row {
+  padding: 12px 18px;
+  border-top: 1px solid rgba(215,92,255,.12);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(12,8,20,.6);
+  overflow: hidden;
+}
+.session-icons-row .eyebrow { color: #7a6899; font-size: 10px; letter-spacing: 1px; margin-right: 4px; white-space: nowrap; }
+.session-queue-icons { display: flex; gap: 5px; flex-wrap: nowrap; overflow: hidden; }
+.session-queue-icons img { width: 28px; height: 28px; border-radius: 6px; object-fit: contain; background: rgba(215,92,255,.08); border: 1px solid rgba(215,92,255,.18); opacity: .75; transition: opacity .2s, transform .2s; }
+.session-queue-icons img:hover { opacity: 1; transform: scale(1.15); }
+.session-queue-icons img:first-child { opacity: 1; border-color: rgba(215,92,255,.55); box-shadow: 0 0 8px rgba(215,92,255,.3); }
 .panel { 
   background: rgba(26,13,42,0.9); 
   border: 1px solid rgba(215,92,255,0.2); 
@@ -347,6 +407,7 @@ label { display: block; color: var(--muted); font-weight: 900; font-size: 12px; 
   .app, .queuebar { margin-left: 0; left: 0; }
   .two, .brawler-layout, .settings-grid { grid-template-columns: 1fr; }
   .session-cards { grid-template-columns: 1fr; }
+  .dashboard-top { grid-template-columns: 1fr; }
   .playstyle-toolbar { align-items: stretch; flex-direction: column; }
   .queuebar { position: static; height: auto; max-height: none; }
   .queue-resize-handle { display: none; }

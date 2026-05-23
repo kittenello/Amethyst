@@ -8,12 +8,11 @@
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><div class="logo">A</div><span>Amethyst</span></div>
+    <div class="brand"><img src="/assets/amethyst.png" class="logo-img" alt="Amethyst"><span>Amethyst</span></div>
     <nav>
       <button class="nav active" data-view="dashboard"><span>#</span><b data-i18n="dashboard">Dashboard</b></button>
       <button class="nav" data-view="multi"><span>∞</span><b>Multi-Instance</b></button>
       <button class="nav" data-view="brawlers"><span>=</span><b data-i18n="brawlers">Brawlers</b></button>
-      <button class="nav" data-view="playstyles"><span>*</span><b data-i18n="playstyles">Playstyles</b></button>
       <button class="nav" data-view="history"><span>+</span><b data-i18n="history">History</b></button>
       <button class="nav" data-view="logging"><span>@</span><b data-i18n="logging">Logging</b></button>
       <button class="nav" data-view="settings"><span>:</span><b data-i18n="settings">Settings</b></button>
@@ -26,17 +25,16 @@
     </header>
 
     <section id="dashboard" class="view active">
-      <div class="grid two">
+      <div class="dashboard-top">
         <div class="panel hero-run">
           <div class="runbox">
             <div class="eyebrow">RUNTIME</div>
             <button id="startBtn" class="start" disabled>&gt; <span>START</span></button>
-            <p id="startHint">Select a brawler and a playstyle before starting.</p>
+            <p id="startHint">Select a brawler queue before starting.</p>
           </div>
         </div>
-        <div class="panel" id="activePlaystyle"></div>
+        <div id="runtimePanel" class="session-side-panel panel"></div>
       </div>
-      <div id="runtimePanel" class="session-panel"></div>
     </section>
 
     <section id="multi" class="view">
@@ -78,20 +76,6 @@
         </div>
         <aside class="panel sticky" id="brawlerEditor"></aside>
       </div>
-    </section>
-
-    <section id="playstyles" class="view">
-      <div class="panel selected-zone">
-        <div class="eyebrow">SELECTED</div>
-        <div id="selectedPlaystyle" class="drop-zone">Drag one playstyle here</div>
-      </div>
-      <div class="toolbar playstyle-toolbar">
-        <input id="playstyleSearch" class="input" placeholder="Search by playstyle, brawler, or gamemode">
-        <button id="importPlaystyle" class="secondary">Import</button>
-        <input id="playstyleFile" type="file" accept=".pyla" hidden>
-      </div>
-      <div class="eyebrow muted">LIBRARY</div>
-      <div id="playstyleGrid" class="playstyle-grid"></div>
     </section>
 
     <section id="history" class="view">

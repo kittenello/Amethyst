@@ -45,26 +45,6 @@ def title_from_slug(value):
     return name.replace("8 Bit", "8bit") or str(value)
 
 
-def read_playstyle_meta(path):
-    fallback = {
-        "file": path.name,
-        "name": path.stem.replace("_", " ").title(),
-        "description": "Custom PylaAI playstyle",
-        "author": "Local",
-        "date": "",
-        "brawlers": ["all"],
-        "gamemodes": ["all"],
-    }
-    try:
-        first_line = path.read_text(encoding="utf-8", errors="ignore").splitlines()[0]
-        meta = json.loads(first_line)
-        if isinstance(meta, dict):
-            fallback.update(meta)
-    except Exception:
-        pass
-    fallback["file"] = path.name
-    return fallback
-
 
 def clean_player_tag(tag):
     tag = str(tag or "").strip().upper()
@@ -701,7 +681,7 @@ class WebApp:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         url = f"http://{self.host}:{self.port}"
-        print(f"Amethyst webapp: {url}")
+        print(f"amethyst webapp: {url}")
         webbrowser.open(url)
         self.ready.wait()
         return self.selected_data
@@ -728,10 +708,10 @@ class WebApp:
             "status": "Idle",
             "authenticated": True,
             "playerTag": brawl_api_config.get("player_tag", ""),
-            "currentPlaystyle": bot_config.get("current_playstyle", ""),
             "brawlers": self.get_brawlers(),
             "queue": queue if isinstance(queue, list) else [],
-            "playstyles": self.get_playstyles(),
+            "currentPlaystyle": "team_showdown.pyla",
+            "playstyles": [],
             "history": self.get_history(),
             "settings": self.get_settings(bot_config, general_config),
             "logging": self.get_logging_settings(),
@@ -748,12 +728,6 @@ class WebApp:
             })
         return rows
 
-    def get_playstyles(self):
-        playstyles_dir = ROOT / "playstyles"
-        rows = []
-        for path in sorted(playstyles_dir.glob("*.pyla")):
-            rows.append(read_playstyle_meta(path))
-        return rows
 
     def get_runtime_state(self, queue):
         with self.runtime_lock:
@@ -900,12 +874,9 @@ class WebApp:
         queue = payload.get("queue")
         if not isinstance(queue, list) or not queue:
             queue = self._read_json(ROOT / "latest_brawler_data.json", [])
-        playstyle = str(payload.get("playstyle", "")).strip()
-        if not playstyle:
-            bot_config_saved = load_toml_as_dict(str(ROOT / "cfg" / "bot_config.toml"))
-            playstyle = str(bot_config_saved.get("current_playstyle", "")).strip()
-        if not queue or not playstyle:
-            raise ValueError("Queue and playstyle are required before starting.")
+        playstyle = "team_showdown.pyla"
+        if not queue:
+            raise ValueError("Queue is required before starting.")
         bot_config_path = str(ROOT / "cfg" / "bot_config.toml")
         bot_config = dict(load_toml_as_dict(bot_config_path))
         bot_config["current_playstyle"] = playstyle
@@ -1047,14 +1018,13 @@ class WebApp:
         if not isinstance(queue, list):
             queue = []
         bot_config = load_toml_as_dict(str(ROOT / "cfg" / "bot_config.toml"))
-        playstyle = str(bot_config.get("current_playstyle", "")).strip()
+        playstyle = "team_showdown.pyla"
 
-        if not queue or not playstyle:
-            # Bot was never started from dashboard — nothing to resume.
+        if not queue:
             with self.runtime_lock:
                 self.runtime_state = "running"
             self.ready.set()
-            return {"ok": True, "state": "running", "warning": "No queue or playstyle saved; start from dashboard first."}
+            return {"ok": True, "state": "running", "warning": "No queue saved; start from dashboard first."}
 
         self.selected_data = queue
         self.data_setter(queue)
@@ -1108,40 +1078,7 @@ class WebApp:
         save_dict_as_toml(config, path)
         return {"ok": True, "playerTag": config["player_tag"]}
 
-    def import_playstyle(self, payload):
-        filename = os.path.basename(str(payload.get("filename", "")).strip())
-        content = str(payload.get("content", ""))
-        if not filename.lower().endswith(".pyla"):
-            raise ValueError("Only .pyla files can be imported.")
-        if not filename:
-            raise ValueError("Missing playstyle filename.")
-        target_dir = ROOT / "playstyles"
-        target_dir.mkdir(exist_ok=True)
-        target = target_dir / filename
-        if target.exists():
-            stem = target.stem
-            suffix = target.suffix
-            index = 2
-            while target.exists():
-                target = target_dir / f"{stem}_{index}{suffix}"
-                index += 1
-        target.write_text(content, encoding="utf-8")
-        return {"ok": True, "playstyles": self.get_playstyles(), "file": target.name}
 
-    def delete_playstyle(self, payload):
-        filename = os.path.basename(str(payload.get("filename", "")).strip())
-        if not filename.lower().endswith(".pyla"):
-            raise ValueError("Only .pyla playstyles can be deleted.")
-        target = ROOT / "playstyles" / filename
-        if not target.exists():
-            raise ValueError("Playstyle not found.")
-        target.unlink()
-        bot_config_path = str(ROOT / "cfg" / "bot_config.toml")
-        bot_config = dict(load_toml_as_dict(bot_config_path))
-        if bot_config.get("current_playstyle") == filename:
-            bot_config["current_playstyle"] = ""
-            save_dict_as_toml(bot_config, bot_config_path)
-        return {"ok": True, "playstyles": self.get_playstyles()}
 
     def send_telegram_test(self):
         try:
@@ -1315,6 +1252,9 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
         if requested.startswith("/assets/brawler_icons/"):
             filename = os.path.basename(requested)
             return str(BRAWLER_ICONS / filename)
+        if requested.startswith("/assets/brawler_icons2/"):
+            filename = os.path.basename(requested)
+            return str(BRAWLER_ICONS2 / filename)
         if requested == "/":
             return str(WEB_ROOT / "index.html")
         return str(WEB_ROOT / requested.lstrip("/"))
@@ -1372,10 +1312,6 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
                 return self.send_json(self.web_app.update_config(payload))
             if parsed.path == "/api/player-tag":
                 return self.send_json(self.web_app.update_player_tag(payload))
-            if parsed.path == "/api/playstyles/import":
-                return self.send_json(self.web_app.import_playstyle(payload))
-            if parsed.path == "/api/playstyles/delete":
-                return self.send_json(self.web_app.delete_playstyle(payload))
             if parsed.path == "/api/logging/telegram-test":
                 return self.send_json(self.web_app.send_telegram_test())
             if parsed.path == "/api/logging/telegram-start":
