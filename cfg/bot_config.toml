@@ -60,3 +60,4 @@ multi_enemy_flee_weight = 0.45
 angle_smooth_factor = 0.28
 post_match_action = "play_again"
 global_pick_brawlers = true
+current_playstyle = "team_showdown.pyla"
