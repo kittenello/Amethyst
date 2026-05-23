@@ -28,7 +28,7 @@ DEFAULT_INTERVAL_SECONDS = 0.35
 DEFAULT_TAP_COUNT = 5
 DEFAULT_TAP_INTERVAL_SECONDS = 1.0
 DEFAULT_POST_STANDARD_TAP_DELAY_SECONDS = 7.0
-DEFAULT_HOLD_TIMEOUT_SECONDS = 15.0
+DEFAULT_HOLD_TIMEOUT_SECONDS = 20
 DEFAULT_HOLD_CHECK_INTERVAL_SECONDS = 0.20
 DEFAULT_POST_HOLD_TAP_DELAY_SECONDS = 7.0
 DEFAULT_CHAOS_TAP_INTERVAL_SECONDS = 0.5
@@ -320,7 +320,6 @@ class StarrDropIntegration:
             target=self._run, name="StarrDropDetector", daemon=True
         )
         self._thread.start()
-        print("starr drop background detector thread started.")
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -501,10 +500,6 @@ class StarrDropIntegration:
         try:
             template_dir = _project_root() / _TEMPLATE_SUBDIR
             templates = load_templates(template_dir)
-            print(
-                f"starr drop loaded {len(templates)} templates from {template_dir}. "
-                f"threshold={self._threshold*100:.0f}%  interval={self._interval}s"
-            )
 
             next_action_at = 0.0
 

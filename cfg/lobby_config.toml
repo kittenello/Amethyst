@@ -1,7 +1,7 @@
 # Coords of btns the bot tries to press.
 [lobby]
 select_btn = [150, 950]
-trophy_observer = [20, 10, 650, 200]
+trophy_observer = [0, 5, 700, 200]
 brawler_btn = [110, 490]
 [template_matching]
 powerpoint = [1000, 5, 80, 80]

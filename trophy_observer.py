@@ -89,10 +89,16 @@ class TrophyObserver:
         """Return trophy delta for showdown trio based on finishing place.
 
         place_index is 0-based: 0 = 1st, 1 = 2nd, 2 = 3rd, 3 = 4th.
+
+        NOTE: trophies_multiplier is intentionally NOT applied here.
+        Showdown deltas are fixed by the official Brawl Stars trophy table
+        and do not scale with any multiplier event/setting.
+        Applying the multiplier here caused a desync between the bot's
+        internal trophy count and the actual in-game trophies.
         """
         for max_trophies, deltas in self.showdown_trio_ranges:
             if float(self.current_trophies) <= float(max_trophies):
-                return deltas[place_index] * self.trophies_multiplier
+                return deltas[place_index]
         return 0
 
     def load_history(self, brawler_list):
