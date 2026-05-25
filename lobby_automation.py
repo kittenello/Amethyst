@@ -1,22 +1,52 @@
-# fuck this shit ass, i was tried about 5 hours to refactor this
-
 from difflib import SequenceMatcher
 import os
 import time
 
 import cv2
+import numpy as np
 
 from typization import BrawlerName
 from state_finder import get_state
-from utils import (
-    extract_text_and_positions,
-    extract_text_strings,
-    count_hsv_pixels,
-    load_toml_as_dict,
-    load_brawlers_info,
-)
+from utils import extract_text_and_positions, count_hsv_pixels, load_toml_as_dict, find_template_center
 
+debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
 gray_pixels_treshold = load_toml_as_dict("./cfg/bot_config.toml")['idle_pixels_minimum']
+
+
+_CONFLICT_PAIRS: list = [
+    frozenset({"bolt",   "eve"}),
+    frozenset({"bolt",   "moe"}),
+    frozenset({"bolt",   "ruffs"}),
+    frozenset({"bolt",   "buster"}),
+    frozenset({"bolt",   "buzz"}),
+    frozenset({"bolt",   "tick"}),
+    frozenset({"bolt",   "clancy"}),
+    frozenset({"fang",   "mrp"}),
+    frozenset({"bull",   "mrp"}),
+    frozenset({"bull",   "otis"}),
+    frozenset({"edgar",  "ruffs"}),
+    frozenset({"edgar",  "eve"}),
+    frozenset({"edgar",  "mrp"}),
+    frozenset({"edgar",  "rt"}),
+    frozenset({"ruffs",  "tick"}),
+    frozenset({"ruffs",  "buzz"}),
+    frozenset({"ruffs",  "pam"}),
+    frozenset({"ruffs",  "bibi"}),
+    frozenset({"buster", "mrp"}),
+    frozenset({"buster", "ruffs"}),
+    frozenset({"buster", "edgar"}),
+    frozenset({"buster", "rt"}),
+    frozenset({"eve",    "tick"}),
+    frozenset({"eve",    "bull"}),
+    frozenset({"buzz",   "mortis"}),
+    frozenset({"fang",   "mortis"}),
+    frozenset({"gene",   "stu"}),
+    frozenset({"colt",   "otis"}),
+    frozenset({"bibi",   "tick"}),
+    frozenset({"bo",     "leon"}),
+]
+
+_CONFLICTED_BRAWLERS: set = {key for pair in _CONFLICT_PAIRS for key in pair}
 
 
 class LobbyAutomation:
@@ -24,140 +54,10 @@ class LobbyAutomation:
     def __init__(self, window_controller):
         self.coords_cfg = load_toml_as_dict("./cfg/lobby_config.toml")
         self.window_controller = window_controller
+        self.brawler_icons_dir = os.path.join("api", "assets", "brawler_icons2")
+        self.brawler_icons = self.load_brawler_icons()
         self.selected_brawler_key = None
         self.selected_brawler_name = None
-        self.known_brawler_names = self._load_known_brawler_names()
-
-
-    def _read_state(self):
-        try:
-            screenshot = self.window_controller.screenshot()
-            if screenshot is None:
-                return None
-            return get_state(screenshot)
-        except Exception as e:
-            debug_enabled = str(load_toml_as_dict("cfg/general_config.toml").get("super_debug", "no")).lower() in ("yes", "true", "1")
-            if debug_enabled:
-                print(f"Could not read state while opening brawler menu: {e}")
-            return None
-
-    @staticmethod
-    def _load_known_brawler_names():
-        try:
-            return {
-                LobbyAutomation.normalize_ocr_name(name)
-                for name in load_brawlers_info().keys()
-                if name
-            }
-        except Exception:
-            return set()
-
-    def is_probably_brawler_selection_screen(self, screenshot=None):
-        try:
-            if screenshot is None:
-                screenshot = self.window_controller.screenshot()
-            if screenshot is None:
-                return False
-            results = extract_text_and_positions(screenshot)
-        except Exception:
-            return False
-
-        known_names = getattr(self, "known_brawler_names", None) or self._load_known_brawler_names()
-        self.known_brawler_names = known_names
-
-        normalized_texts = {
-            self.resolve_ocr_typos(self.normalize_ocr_name(text))
-            for text in results.keys()
-        }
-        known_hits = len(normalized_texts & known_names)
-        selection_words = {
-            "brawlers", "brawler", "sortby", "leasttrophies",
-            "mosttrophies", "trophies", "locked", "upgrade",
-        }
-        selection_word_hits = len(normalized_texts & selection_words)
-        return known_hits >= 2 or (known_hits >= 1 and selection_word_hits >= 1)
-
-    def click_visible_brawler_menu_button(self):
-        try:
-            screenshot = self.window_controller.screenshot()
-            if screenshot is None:
-                return False
-            results = extract_text_and_positions(screenshot)
-        except Exception:
-            return False
-
-        for text, box in results.items():
-            if self.normalize_ocr_name(text) not in {"brawlers", "brawler"}:
-                continue
-            center = box.get("center")
-            if not center:
-                continue
-            x, y = center
-            if x > screenshot.shape[1] * 0.35:
-                continue
-            self.window_controller.click(int(x), int(y))
-            return True
-        return False
-
-    def open_brawler_selection(self, attempts=None):
-        wr = self.window_controller.width_ratio
-        hr = self.window_controller.height_ratio
-        cfg_point = tuple(self.coords_cfg.get("lobby", {}).get("brawler_btn", (110, 490)))
-        brawler_button_points = (
-            (70, 500), (90, 500), (110, 490), (128, 500), (60, 535),
-            (145, 505), cfg_point, (76, 420), (98, 420), (122, 420),
-            (72, 455), (100, 455), (132, 455), (82, 385), (112, 385),
-        )
-        if attempts is None:
-            attempts = len(brawler_button_points)
-
-        state = self._read_state()
-        if state == "brawler_selection":
-            return True
-        if state == "shop" and self.is_probably_brawler_selection_screen():
-            return True
-
-        if state == "lobby" and self.click_visible_brawler_menu_button():
-            time.sleep(0.8)
-            state = self._read_state()
-            if state == "brawler_selection":
-                return True
-            if state == "shop" and self.is_probably_brawler_selection_screen():
-                return True
-
-        for attempt in range(attempts):
-            if state == "shop":
-                if self.is_probably_brawler_selection_screen():
-                    return True
-                self.press_back()
-                time.sleep(0.8)
-                state = self._read_state()
-                if state == "brawler_selection":
-                    return True
-                if state == "shop" and self.is_probably_brawler_selection_screen():
-                    return True
-                if state == "lobby" and self.click_visible_brawler_menu_button():
-                    time.sleep(0.8)
-                    state = self._read_state()
-                    if state == "brawler_selection":
-                        return True
-                    if state == "shop" and self.is_probably_brawler_selection_screen():
-                        return True
-
-            x, y = brawler_button_points[min(attempt, len(brawler_button_points) - 1)]
-            self.window_controller.click(int(x * wr), int(y * hr))
-            time.sleep(0.8)
-            state = self._read_state()
-            if state == "brawler_selection":
-                return True
-            if state == "shop" and self.is_probably_brawler_selection_screen():
-                return True
-            if state == "shop":
-                continue
-            if state is None:
-                return True
-
-        return False
 
     def check_for_idle(self, frame):
         general_config = load_toml_as_dict("cfg/general_config.toml")
@@ -175,6 +75,18 @@ class LobbyAutomation:
             self.window_controller.click(int(535 * wr), int(615 * hr))
 
     def select_brawler(self, brawler):
+        current_state = self.current_state()
+        if current_state != "lobby":
+            raise RuntimeError(
+                f"Named brawler selection skipped: current state is {current_state}, not lobby."
+            )
+
+        target_key = self.normalize_ocr_name(brawler)
+
+        if self.selected_brawler_key == target_key:
+            print(f"Brawler {brawler} is already selected; skipping auto-pick.")
+            return True
+
         self.window_controller.screenshot()
         wr = self.window_controller.width_ratio
         hr = self.window_controller.height_ratio
@@ -184,110 +96,254 @@ class LobbyAutomation:
             ocr_scale = float(general_config.get("ocr_scale_down_factor", 0.65))
         except (TypeError, ValueError):
             ocr_scale = 0.65
-        ocr_scale = max(1.2, ocr_scale * 1.8)
-        target_key = self.normalize_ocr_name(brawler)
+        ocr_scale = max(0.35, min(1.0, ocr_scale))
 
-        if not self.open_brawler_selection():
-            print(f"WARNING: Could not open brawler selection menu for '{brawler}'. "
-                  "Continuing with the currently selected brawler instead of crashing.")
-            self.press_back()
-            return False
+        x = self.coords_cfg['lobby']['brawler_btn'][0] * wr
+        y = self.coords_cfg['lobby']['brawler_btn'][1] * hr
+        self.window_controller.click(x, y)
+        time.sleep(0.8)
 
         c = 0
         found_brawler = False
+        reworked_results = {}
+        icon_available = self.get_brawler_icon(target_key) is not None
 
         for i in range(50):
             screenshot_full = self.window_controller.screenshot()
-            full_h = screenshot_full.shape[0]
 
-            fh_full, fw_full = screenshot_full.shape[:2]
-            try:
-                _scale = 2.0
-                _big = cv2.resize(screenshot_full, None, fx=_scale, fy=_scale,
-                                  interpolation=cv2.INTER_CUBIC)
-                _gray = cv2.cvtColor(_big, cv2.COLOR_RGB2GRAY)
-                _, _thresh = cv2.threshold(_gray, 180, 255, cv2.THRESH_BINARY)
-                _ocr_input = cv2.cvtColor(_thresh, cv2.COLOR_GRAY2RGB)
-                ocr_results_raw = extract_text_and_positions(_ocr_input)
-                ocr_results = {}
-                for text, box in ocr_results_raw.items():
-                    scaled_box = {}
-                    for key, val in box.items():
-                        if key in ("center", "top_left", "top_right", "bottom_right", "bottom_left"):
-                            # val is (x, y) or [x, y]
-                            scaled_box[key] = (val[0] / _scale, val[1] / _scale)
-                        else:
-                            scaled_box[key] = val
-                    ocr_results[text] = scaled_box
-            except Exception as _e:
-                print(f"OCR error: {_e}")
-                ocr_results = {}
-
-            matches = []
-            for raw_text, box in ocr_results.items():
-                norm = self.resolve_ocr_typos(self.normalize_ocr_name(raw_text))
-                if self.names_match(norm, target_key):
-                    score = self.name_match_score(norm, target_key)
-                    center = box.get("center")
-                    if center:
-                        cx, cy = int(center[0]), int(center[1])
-                        matches.append((score, norm, cx, cy))
-                        print(f"match: {raw_text!r} -> {norm!r} score={score:.2f} pos=({cx},{cy})")
-
-
-            if matches:
-                matches.sort(key=lambda item: item[0], reverse=True)
-                _, detected_name, click_x, click_y = matches[0]
+            icon_match = self.find_brawler_icon_on_screen(screenshot_full, target_key)
+            if icon_match is not None:
+                click_x, click_y, score = icon_match
                 self.window_controller.click(click_x, click_y)
-                print(f"found brawler {brawler} {detected_name} clicking at {click_x}, {click_y}")
-                time.sleep(1.0)
-
-                verify_screenshot = self.window_controller.screenshot()
-                verify_state = get_state(verify_screenshot)
-                card_is_open = verify_state in ("brawler_selection", "shop")
-                if not card_is_open:
-                    try:
-                        select_words = {"select", "selegt", "selec", "selct", "selert"}
-                        card_is_open = any(
-                            self.normalize_ocr_name(text) in select_words
-                            for text in extract_text_strings(verify_screenshot)
-                        )
-                        if card_is_open:
-                            print(f"ok")
-                    except Exception:
-                        pass
-
-                if not card_is_open:
-                    time.sleep(0.5)
-                    continue
-
+                print("Found brawler ", brawler, f"(ICON: {score:.2f}) clicking on its icon at ", click_x, click_y)
+                time.sleep(1)
                 select_x = self.coords_cfg['lobby']['select_btn'][0]
                 select_y = self.coords_cfg['lobby']['select_btn'][1]
                 self.window_controller.click(select_x, select_y, already_include_ratio=False)
                 time.sleep(0.5)
-                print(f"Selected brawler {brawler}")
+                print("Selected brawler ", brawler)
                 self.selected_brawler_key = target_key
                 self.selected_brawler_name = brawler
                 found_brawler = True
                 break
 
+            if not icon_available:
+                screenshot = cv2.resize(
+                    screenshot_full,
+                    (int(screenshot_full.shape[1] * ocr_scale), int(screenshot_full.shape[0] * ocr_scale)),
+                    interpolation=cv2.INTER_AREA,
+                )
+
+                if debug_enabled:
+                    print("extracting text on current screen...")
+                results = extract_text_and_positions(screenshot)
+                reworked_results = {}
+                for key in results.keys():
+                    orig_key = key
+                    key = self.normalize_ocr_name(key)
+                    key = self.resolve_ocr_typos(key)
+                    reworked_results[key] = results[orig_key]
+                if debug_enabled:
+                    print("All detected text while looking for brawler name:", reworked_results.keys())
+                    print()
+                matches = []
+                for detected_name, text_box in reworked_results.items():
+                    if self.names_match(detected_name, target_key):
+                        score = self.name_match_score(detected_name, target_key)
+                        matches.append((score, detected_name, text_box))
+                if matches:
+                    matches.sort(key=lambda item: item[0], reverse=True)
+                    _, detected_name, text_box = matches[0]
+                    x, y = text_box['center']
+                    click_x = int(x / ocr_scale)
+                    click_y = int((y / ocr_scale) - (95 * hr))
+                    click_y = max(0, min(screenshot_full.shape[0] - 1, click_y))
+                    self.window_controller.click(click_x, click_y)
+                    print("Found brawler ", brawler, f"(OCR: {detected_name}) clicking on its icon at ", click_x, click_y)
+                    time.sleep(1)
+                    select_x = self.coords_cfg['lobby']['select_btn'][0]
+                    select_y = self.coords_cfg['lobby']['select_btn'][1]
+                    self.window_controller.click(select_x, select_y, already_include_ratio=False)
+                    time.sleep(0.5)
+                    print("Selected brawler ", brawler)
+                    self.selected_brawler_key = target_key
+                    self.selected_brawler_name = brawler
+                    found_brawler = True
+                    break
+
             if c == 0:
                 wr = self.window_controller.width_ratio
                 hr = self.window_controller.height_ratio
-                self.window_controller.swipe(int(1740 * wr), int(900 * hr), int(1740 * wr), int(675 * hr), duration=0.6)
-                c += 1
+
+            scroll_x = int(1794 * wr)
+            scroll_y_start = int(900 * hr)
+            scroll_y_end = int(600 * hr)
+            self.window_controller.swipe(scroll_x, scroll_y_start, scroll_x, scroll_y_end, duration=0.45)
+            time.sleep(0.15 if c == 0 else 0.8)
+            c += 1
+            if c == 1:
                 continue
 
-            self.window_controller.swipe(int(1740 * wr), int(900 * hr), int(1740 * wr), int(675 * hr), duration=0.7)
-            time.sleep(1)
-
         if not found_brawler:
-            print(f"WARNING: Brawler '{brawler}' was not found after 50 scroll attempts. "
-                  "The bot will continue with the currently selected brawler.")
-            return False
+            print(f"WARNING: Brawler '{brawler}' was not found after 50 scroll attempts. ")
+            if reworked_results:
+                print(f"Detected brawlers during search: {list(reworked_results.keys())}")
+            else:
+                print("Detected brawlers during search: []")
+            raise ValueError(f"Brawler '{brawler}' could not be found in brawler selection menu.")
+
         return True
 
+    def load_brawler_icons(self):
+        icons = {}
+        if not os.path.isdir(self.brawler_icons_dir):
+            return icons
+        for filename in os.listdir(self.brawler_icons_dir):
+            lower = filename.lower()
+            if not lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                continue
+            path = os.path.join(self.brawler_icons_dir, filename)
+            icon = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+            if icon is None:
+                continue
+            key = self.normalize_ocr_name(os.path.splitext(filename)[0])
+            icons[key] = icon
+        return icons
+
+    def get_brawler_icon(self, target_key):
+        target_key = self.normalize_ocr_name(target_key)
+        if target_key in self.brawler_icons:
+            return self.brawler_icons[target_key]
+        resolved_key = self.resolve_ocr_typos(target_key)
+        if resolved_key in self.brawler_icons:
+            return self.brawler_icons[resolved_key]
+        best_key = None
+        best_score = 0.0
+        for key in self.brawler_icons.keys():
+            if self.names_match(key, target_key) or self.names_match(target_key, key):
+                score = self.name_match_score(key, target_key)
+                if score > best_score:
+                    best_score = score
+                    best_key = key
+        if best_key is not None:
+            return self.brawler_icons[best_key]
+        return None
+
+    def find_brawler_icon_on_screen(self, frame, target_key):
+        icon = self.get_brawler_icon(target_key)
+        if icon is None or frame is None:
+            return None
+
+        if len(frame.shape) == 2:
+            frame_gray = frame
+        else:
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        if len(icon.shape) == 2:
+            icon_gray = icon
+        else:
+            if icon.shape[2] == 4:
+                icon = cv2.cvtColor(icon, cv2.COLOR_BGRA2BGR)
+            icon_gray = cv2.cvtColor(icon, cv2.COLOR_BGR2GRAY)
+
+        is_conflicted = target_key in _CONFLICTED_BRAWLERS
+        THRESHOLD_STRICT  = 0.72 if is_conflicted else 0.65
+        THRESHOLD_RELAXED = 0.65 if is_conflicted else 0.58
+
+        best_score = 0.0
+        best_loc   = None
+        best_size  = None
+
+        for scale in np.arange(0.5, 1.61, 0.1):
+            resized = cv2.resize(
+                icon_gray, (0, 0),
+                fx=float(scale), fy=float(scale),
+                interpolation=cv2.INTER_AREA,
+            )
+            h, w = resized.shape[:2]
+            if h < 8 or w < 8:
+                continue
+            if h >= frame_gray.shape[0] or w >= frame_gray.shape[1]:
+                continue
+            result = cv2.matchTemplate(frame_gray, resized, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            if max_val > best_score:
+                best_score = float(max_val)
+                best_loc   = max_loc
+                best_size  = (w, h)
+
+        if best_loc is None or best_size is None:
+            return None
+
+        if best_score >= THRESHOLD_STRICT:
+            x, y = best_loc
+            w, h = best_size
+            return int(x + w // 2), int(y + h // 2), best_score
+        if best_score < THRESHOLD_RELAXED:
+            return None
+
+
+        x, y   = best_loc
+        w, h   = best_size
+        pad_x  = max(0, x - w // 4)
+        pad_y  = max(0, y - h // 4)
+        region = frame_gray[
+            pad_y : min(frame_gray.shape[0], y + h + h // 4),
+            pad_x : min(frame_gray.shape[1], x + w + w // 4),
+        ]
+
+        rival_best = 0.0
+        for rival_key, rival_icon in self.brawler_icons.items():
+            if rival_key == target_key:
+                continue
+            if len(rival_icon.shape) == 2:
+                rival_gray = rival_icon
+            else:
+                if rival_icon.shape[2] == 4:
+                    rival_icon = cv2.cvtColor(rival_icon, cv2.COLOR_BGRA2BGR)
+                rival_gray = cv2.cvtColor(rival_icon, cv2.COLOR_BGR2GRAY)
+
+            target_scale = w / icon_gray.shape[1]
+            rival_resized = cv2.resize(
+                rival_gray, (0, 0),
+                fx=target_scale, fy=target_scale,
+                interpolation=cv2.INTER_AREA,
+            )
+            rh, rw = rival_resized.shape[:2]
+            if rh < 8 or rw < 8:
+                continue
+            if rh >= region.shape[0] or rw >= region.shape[1]:
+                continue
+            try:
+                res = cv2.matchTemplate(region, rival_resized, cv2.TM_CCOEFF_NORMED)
+                _, rv, _, _ = cv2.minMaxLoc(res)
+                if rv > rival_best:
+                    rival_best = float(rv)
+            except cv2.error:
+                continue
+
+
+        if best_score >= rival_best + 0.03:
+            return int(x + w // 2), int(y + h // 2), best_score
+
+        return None
+
+    def current_state(self):
+        try:
+            return get_state(self.window_controller.screenshot())
+        except Exception as e:
+            print(f"Could not read current state before brawler selection: {e}")
+            return "unknown"
+
     def select_lowest_trophy_brawler(self):
+        current_state = self.current_state()
+        if current_state != "lobby":
+            print(
+                "Lowest-trophy brawler selection skipped: "
+                f"current state is {current_state}, not lobby."
+            )
+            return False
+
         wr = self.window_controller.width_ratio
         hr = self.window_controller.height_ratio
 
@@ -295,6 +351,7 @@ class LobbyAutomation:
             self.window_controller.click(int(x * wr), int(y * hr))
             time.sleep(wait)
 
+        print("Selecting next brawler by sorting lowest trophies.")
         tap(128, 500, 1.4)
         tap(1210, 45, 0.6)
         tap(1210, 426, 1.0)
@@ -302,9 +359,16 @@ class LobbyAutomation:
         tap(260, 991, 1.0)
         if self.ensure_lobby_after_selection():
             return True
-        
-        self.press_back()
-        time.sleep(0.8)
+
+        recovery_state = self.current_state()
+        if recovery_state != "brawler_selection":
+            print(
+                "Lowest-trophy brawler selection failed and recovery is blocked: "
+                f"current state is {recovery_state}, not brawler_selection."
+            )
+            return False
+
+        print("Lowest-trophy brawler selection did not return to lobby; trying one recovery pass.")
         tap(260, 991, 1.0)
         return self.ensure_lobby_after_selection()
 
@@ -314,6 +378,7 @@ class LobbyAutomation:
             try:
                 state = get_state(self.window_controller.screenshot())
             except Exception as e:
+                print(f"Could not verify lobby after brawler selection: {e}")
                 return False
             if state == "lobby":
                 return True
@@ -322,8 +387,12 @@ class LobbyAutomation:
                     int(260 * self.window_controller.width_ratio),
                     int(991 * self.window_controller.height_ratio),
                 )
-            elif state == "match":
-                self.press_back()
+            elif state in ("match", "match_making"):
+                print(
+                    "Brawler selection verification saw "
+                    f"{state}; stopping selection so it does not tap during a match."
+                )
+                return False
             time.sleep(0.7)
         return False
 
@@ -338,18 +407,19 @@ class LobbyAutomation:
     @staticmethod
     def resolve_ocr_typos(potential_brawler_name: str) -> str:
         matched_typo: str | None = {
-            'shey':         BrawlerName.Shelly.value,
-            'shlly':        BrawlerName.Shelly.value,
+            'shey': BrawlerName.Shelly.value,
+            'shlly': BrawlerName.Shelly.value,
             'larryslawrie': BrawlerName.Larry.value,
-            '[eon':         BrawlerName.Leon.value,
-            'brock':        BrawlerName.Brock.value,
-            'brok':         BrawlerName.Brock.value,
-            'gal':          BrawlerName.Gale.value,
-            'gale':         BrawlerName.Gale.value,
-            'darryl':       BrawlerName.Darryl.value,
-            'daryl':        BrawlerName.Darryl.value,
-            'dary':         BrawlerName.Darryl.value,
+            '[eon': BrawlerName.Leon.value,
+            'brock': BrawlerName.Brock.value,
+            'brok': BrawlerName.Brock.value,
+            'gal': BrawlerName.Gale.value,
+            'gale': BrawlerName.Gale.value,
+            'darryl': BrawlerName.Darryl.value,
+            'daryl': BrawlerName.Darryl.value,
+            'dary': BrawlerName.Darryl.value,
         }.get(potential_brawler_name, None)
+
         return matched_typo or potential_brawler_name
 
     @staticmethod
@@ -381,14 +451,8 @@ class LobbyAutomation:
     def names_match(cls, detected_name: str, target_name: str) -> bool:
         if detected_name == target_name:
             return True
-        if len(target_name) <= 2:
-            return False
-        if len(target_name) == 3 and len(detected_name) < 3:
-            return False
         if len(target_name) >= 4 and (target_name in detected_name or detected_name in target_name):
-            coverage = len(detected_name) / max(1, len(target_name))
-            if coverage >= 0.55:
-                return True
+            return True
         limit = 1 if len(target_name) <= 5 else 2
         if cls.bounded_edit_distance(detected_name, target_name, limit) <= limit:
             return True
