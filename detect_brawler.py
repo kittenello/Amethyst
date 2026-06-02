@@ -96,7 +96,7 @@ def detect_brawlers(frame):
                 best_loc = max_loc
                 best_size = (w, h)
 
-        if best_score > 0.45:
+        if best_score > 0.6:
 
             x, y = best_loc
             w, h = best_size

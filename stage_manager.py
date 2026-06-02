@@ -186,10 +186,18 @@ class StageManager:
 
     @staticmethod
     def _queue_api_url():
-        return os.environ.get("PYLA_QUEUE_API_URL", "http://127.0.0.1:8765/api/queue")
+        url = os.environ.get("PYLA_QUEUE_API_URL", "http://127.0.0.1:8765/api/queue")
+        # Child multi-instance workers set PYLA_QUEUE_API_URL=disabled.
+        # Return None so all callers skip the webapp fetch and use only the
+        # local latest_brawler_data.json — prevents brawler cross-contamination.
+        if url.strip().lower() in ("disabled", "none", ""):
+            return None
+        return url
 
     def _fetch_queue_from_webapp(self, timeout=0.75):
         url = self._queue_api_url()
+        if url is None:
+            return None
         request = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -226,10 +234,13 @@ class StageManager:
     def reload_queue_from_webapp(self, reason="queue check"):
         """Reload the canonical dashboard queue before choosing a brawler.
 
-        The browser exposes the current order at http://127.0.0.1:8765/api/queue.
-        This is more reliable than latest_brawler_data.json when the running bot
-        already has a stale queue in memory.
+        For multi-instance child workers (PYLA_QUEUE_API_URL=disabled) the
+        webapp is not available, so we fall directly to disk to avoid picking
+        the wrong brawler from the main instance's queue.
         """
+        if self._queue_api_url() is None:
+            # Child worker: always use local file, never talk to main webapp.
+            return self.reload_queue_from_disk(reason)
         try:
             webapp_queue = self._fetch_queue_from_webapp(timeout=0.75)
         except Exception as e:

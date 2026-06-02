@@ -66,21 +66,19 @@ async function api(path, options = {}) {
 
 async function init() {
   state = await api("/api/state");
-  console.log("[WEBAPP][STATE]", state);
+  console.log("webapp", state);
   
   botRunning = state.runtime?.running || false;
   
-  console.log("[WEBAPP] Initial botRunning state:", botRunning);
+  console.log("webapp Initial botRunning state:", botRunning);
   
   renderAll();
   if (state.playerTag) {
-    loadPlayerData(true).catch(err => console.warn("[WEBAPP][PLAYER] Auto-load failed:", err));
+    loadPlayerData(true).catch(err => console.warn("webapp Auto-load failed:", err));
   }
   
-  // Update button state
   updateStartState(false);
   
-  // Refresh state after 1 second to ensure it's correct
   setTimeout(async () => {
     await refreshRuntime();
   }, 1000);
@@ -197,9 +195,6 @@ function instanceIdForPort(port) {
 }
 
 function selectMultiPort(port) {
-  // Multi-Instance page selection must only choose the target emulator for Start Next.
-  // Do NOT switch Brawlers tabs / queues here, otherwise clicking LDPlayer chips mutates
-  // the bottom queue UI and feels like brawlers disappeared.
   selectedMultiPort = Number(port) || null;
   if (selectedMultiPort) {
     try { localStorage.setItem('amethyst.multi.selectedPort', String(selectedMultiPort)); } catch (_) {}
@@ -230,17 +225,14 @@ function renderAll() {
 }
 
 function switchView(view) {
-  // Hide all views with animation
   document.querySelectorAll(".view.active").forEach(el => {
     el.classList.remove("active");
   });
   
-  // Show new view with animation
   setTimeout(() => {
     document.getElementById(view).classList.add("active");
   }, 50);
   
-  // Update navigation
   document.querySelectorAll(".nav").forEach(el => el.classList.toggle("active", el.dataset.view === view));
 
   const titles = {
@@ -513,16 +505,15 @@ function renderHistory() {
 function winRate(row) { return row.total ? Math.round(row.victory * 100 / row.total) : 0; }
 
 function renderSettings() {
-  // Build the "General" column: Play Again + Global Pick Brawlers + Starr Drop Detect
   const coreData = state.settings.core || {};
   const generalData = state.settings.general || {};
   const generalRows = [
     playAgainRow(coreData.play_again),
     globalPickRow(coreData.global_pick_brawlers),
     starrDropDetectRow(generalData.starr_drop_detect),
+    windowControllerFixRow(generalData.window_controller_fix ?? 0),
   ].join("");
 
-  // Right column: original general settings (minus starr_drop_detect, window_controller_fix) + bot + timers
   const groups = [
     ["general", "Settings", Object.fromEntries(Object.entries(generalData).filter(([k]) => k !== "starr_drop_detect" && k !== "window_controller_fix"))],
     ["bot", "Detection", state.settings.bot],
@@ -531,8 +522,7 @@ function renderSettings() {
 
   const leftCol = `<div class="setting-group"><div class="eyebrow">GENERAL</div>${generalRows}</div>`;
   const rightCols = groups.map(([section, title, data]) => {
-    let rows = Object.entries(data).map(([key, value]) => settingRow(section, key, value)).join("");
-    if (section === "general") rows += windowControllerFixRow(generalData.window_controller_fix ?? 0);
+    const rows = Object.entries(data).map(([key, value]) => settingRow(section, key, value)).join("");
     return `<div class="setting-group"><div class="eyebrow">${title.toUpperCase()}</div>${rows}</div>`;
   }).join("");
 
@@ -727,27 +717,23 @@ async function updateStartState(updatePanel = true) {
   const ready = state.queue.length > 0;
   
   try {
-    // Always get fresh state from server
     const freshState = await api("/api/state");
     const isRunning = freshState.runtime?.running || false;
     
     console.log("[WEBAPP] Direct server state check:", isRunning);
     
-    // Update local botRunning to match server
     botRunning = isRunning;
     
-    // Update button based on server state
     $("startBtn").disabled = !ready && !isRunning;
     $("startBtn").querySelector("span").textContent = isRunning ? "STOP" : "START";
-    $("startHint").textContent = isRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler queue before starting.";
+    $("startHint").textContent = isRunning ? "Bot is running." : ready ? "Queue is ready." : "Select a brawler queue before starting.";
     
     if (updatePanel) renderRuntimePanel();
   } catch (e) {
     console.error("[WEBAPP] Failed to get server state for button:", e);
-    // Fallback to local state
     $("startBtn").disabled = !ready && !botRunning;
     $("startBtn").querySelector("span").textContent = botRunning ? "STOP" : "START";
-    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler queue before starting.";
+    $("startHint").textContent = botRunning ? "Bot is running." : ready ? "Queue is ready." : "Select a brawler queue before starting.";
     
     if (updatePanel) renderRuntimePanel();
   }
@@ -755,41 +741,36 @@ async function updateStartState(updatePanel = true) {
 
 async function startBot() {
   try {
-    // Always get current state from server
     const currentState = await api("/api/state");
     const isRunning = currentState.runtime?.running || false;
     
     if (isRunning) {
-      // Stop the bot - immediately update UI
       $("startBtn").disabled = true;
       $("startBtn").querySelector("span").textContent = "STOPPING";
       await api("/api/stop", { method: "POST", body: "{}" });
-      console.log("[WEBAPP] Bot stopped");
+      console.log("webapp Bot stopped");
       botRunning = false;
       $("startBtn").disabled = false;
       $("startBtn").querySelector("span").textContent = "START";
       $("startHint").textContent = "Queue is ready. Start PylaAI from here.";
     } else {
-      // Start the bot
       $("startBtn").disabled = true;
       $("startBtn").querySelector("span").textContent = "STARTING";
       
       await api("/api/start", { method: "POST", body: JSON.stringify({ queue: state.queue }) });
-      console.log("[WEBAPP] Bot start command sent");
+      console.log("webapp Bot start command sent");
       botRunning = true;
       $("startBtn").disabled = false;
       $("startBtn").querySelector("span").textContent = "STOP";
       $("startHint").textContent = "Bot is running. Stop it from here when needed.";
     }
     
-    // Sync with server after a delay
     setTimeout(async () => {
   await refreshRuntime();
 }, 2000);
     
   } catch (e) {
-    console.error("[WEBAPP] Error in startBot:", e);
-    // Reset button state on error
+    console.error("webapp] Error in startBot:", e);
     $("startBtn").disabled = false;
     $("startBtn").querySelector("span").textContent = "START";
   }
@@ -800,7 +781,6 @@ async function refreshRuntime() {
     const fresh = await api("/api/state");
     state.runtime = fresh.runtime;
     
-    // Update botRunning state from server
     const newBotRunning = fresh.runtime?.running || false;
     if (botRunning !== newBotRunning) {
       console.log(`[WEBAPP] botRunning state changed: ${botRunning} -> ${newBotRunning}`);
@@ -808,13 +788,12 @@ async function refreshRuntime() {
     botRunning = newBotRunning;
     
     renderRuntimePanel();
-    // Update button to match server state
     const ready = state.queue.length > 0;
     $("startBtn").disabled = !ready && !botRunning;
     $("startBtn").querySelector("span").textContent = botRunning ? "STOP" : "START";
-    $("startHint").textContent = botRunning ? "Bot is running. Stop it from here when needed." : ready ? "Queue is ready. Start PylaAI from here." : "Select a brawler queue before starting.";
+    $("startHint").textContent = botRunning ? "Bot is running." : ready ? "Queue is ready." : "Select a brawler queue before starting.";
   } catch (e) {
-    console.error("[WEBAPP] Error in refreshRuntime:", e);
+    console.error("webapp] Error in refreshRuntime:", e);
   }
 }
 
@@ -953,7 +932,6 @@ function initQueueResize() {
 
   function onMove(ev) {
     if (!dragging) return;
-    // Панель закреплена снизу: тащишь вверх -> высота растёт, вниз -> уменьшается.
     setHeight(startHeight - (ev.clientY - startY));
   }
 
@@ -998,7 +976,6 @@ function bindPushAllUi() {
   const modal = $("pushAllModal");
   if (modal) modal.onclick = ev => { if (ev.target.id === "pushAllModal") closePushAllModal(); };
 
-  // StarrDrop modal — backdrop click closes, threshold shows live %
   const sdModal = $("starrDropModal");
   if (sdModal) sdModal.onclick = ev => { if (ev.target.id === "starrDropModal") closeStarrDropModal(); };
   const sdThreshInput = $("sdThreshold");
@@ -1071,13 +1048,11 @@ $("brawlersMultiMode")?.addEventListener("change", async ev => {
   renderBrawlerInstanceTabs();
 });
 init().catch(err => alert(err.message));
-// Adaptive polling based on page visibility and memory usage
 let pollingInterval = 3000;
 let lastPollTime = 0;
 
 function adaptivePoll() {
   const now = Date.now();
-  // Reduce polling when tab is not visible
   const currentInterval = document.visibilityState === "visible" ? pollingInterval : pollingInterval * 3;
   
   if (now - lastPollTime >= currentInterval) {
@@ -1088,46 +1063,37 @@ function adaptivePoll() {
   }
 }
 
-// Use requestAnimationFrame for better performance
 function pollLoop() {
   adaptivePoll();
   requestAnimationFrame(pollLoop);
 }
 
-// Start polling with optimization
 setInterval(() => {
   if (document.visibilityState === "visible" && state) {
     refreshRuntime().catch(() => {});
   }
 }, 3000);
 
-// Memory cleanup every 5 minutes
 setInterval(() => {
-  // Clean up old history data if it gets too large
   if (state.history && state.history.length > 1000) {
     state.history = state.history.slice(-500);
-    console.log("[WEBAPP] Cleaned up old history data for memory optimization");
+    console.log("webapp Cleaned up old history data for memory optimization");
   }
 }, 5 * 60 * 1000);
 
-// Handle page visibility changes for memory optimization
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
-    // Tab is hidden, reduce memory usage
-    console.log("[WEBAPP] Tab hidden, reducing memory usage");
-    // Clear some cached data that can be rebuilt
+    console.log("webapp Tab hidden, reducing memory usage");
     if (typeof state !== 'undefined') {
       state.cachedFrames = [];
       state.cachedData = null;
     }
   } else if (document.visibilityState === 'visible') {
-    // Tab is visible again, refresh state
-    console.log("[WEBAPP] Tab visible, refreshing state");
+    console.log("webapp Tab visible, refreshing state");
     refreshRuntime().catch(() => {});
   }
 });
 
-// Handle page unload to save state
 window.addEventListener('beforeunload', () => {
   try {
     localStorage.setItem('amergency.lastState', JSON.stringify({
@@ -1136,7 +1102,6 @@ window.addEventListener('beforeunload', () => {
       queue: state?.queue || []
     }));
   } catch (e) {
-    // Silently fail on unload
   }
 });
 
@@ -1285,3 +1250,291 @@ function setupMultiHub() {
     if (document.querySelector('#multi.view.active')) { refreshMulti(); if (selectedMultiLogId) loadMultiLogs(selectedMultiLogId); }
   }, 3000);
 }
+
+(function () {
+  'use strict';
+
+  const overlay  = document.getElementById('onboardingOverlay');
+  const card     = document.getElementById('obCard');
+  if (!overlay || !card) return;
+
+  const choices = { player_tag: null, cpu_or_gpu: null, brawl_client: null, emulator: null };
+  let currentStep = 0;
+
+  function showStep(n) {
+    [0, 1, 2, 3, 4].forEach(i => {
+      const el = document.getElementById('obStep' + i);
+      if (!el) return;
+      if (i === n) {
+        el.classList.remove('ob-step-hidden');
+        el.style.animation = 'none';
+        void el.offsetHeight;
+        el.style.animation = '';
+      } else {
+        el.classList.add('ob-step-hidden');
+      }
+    });
+    [0, 1, 2, 3].forEach(i => {
+      const dot = document.getElementById('obDot' + i);
+      if (!dot) return;
+      dot.classList.toggle('ob-dot-active', i === Math.min(n, 3));
+    });
+    currentStep = n;
+    const dotsEl = card.querySelector('.ob-dots');
+    if (dotsEl) dotsEl.style.display = n === 4 ? 'none' : '';
+  }
+
+  function makeOptions(groupId, field) {
+    const group = document.getElementById(groupId);
+    if (!group) return;
+    group.querySelectorAll('.ob-opt:not(.ob-opt-disabled):not(.ob-opt-unavail)').forEach(btn => {
+      const fresh = btn.cloneNode(true);
+      btn.parentNode.replaceChild(fresh, btn);
+      fresh.addEventListener('click', () => {
+        group.querySelectorAll('.ob-opt').forEach(b => b.classList.remove('ob-selected'));
+        fresh.classList.add('ob-selected');
+        choices[field] = fresh.dataset.value;
+        const nextId = { onnxOptions: 'obNext1', clientOptions: 'obNext2', emulatorOptions: 'obNext3' }[groupId];
+        if (nextId) {
+          const nb = document.getElementById(nextId);
+          if (nb) nb.disabled = false;
+        }
+      });
+    });
+    group.querySelectorAll('.ob-opt-disabled').forEach(btn => {
+      btn.addEventListener('mouseenter', () => {
+        const t = btn.querySelector('.ob-tooltip');
+        if (t) { t.style.opacity = '1'; t.style.transform = 'translateX(-50%) translateY(0)'; }
+      });
+      btn.addEventListener('mouseleave', () => {
+        const t = btn.querySelector('.ob-tooltip');
+        if (t) { t.style.opacity = '0'; t.style.transform = 'translateX(-50%) translateY(4px)'; }
+      });
+    });
+  }
+
+  function buildSummary() {
+    const s = document.getElementById('obSummary');
+    if (!s) return;
+    const clientLabel = { BSD: 'bsd.suitcase.release', 'BSD+': 'bsd.suitcase.plus', Original: 'com.supercell.brawlstars' };
+    let html = '';
+    if (choices.player_tag) {
+      html += `<div> Tag: <strong>${choices.player_tag}</strong></div>`;
+    }
+    html +=
+      `<div> ONNX: <strong>${choices.cpu_or_gpu?.toUpperCase()}</strong></div>` +
+      `<div> Client: <strong>${choices.brawl_client}</strong> <span style="opacity:.6;font-size:11px">(${clientLabel[choices.brawl_client] || ''})</span></div>` +
+      `<div> Emulator: <strong>${choices.emulator}</strong></div>`;
+    s.innerHTML = html;
+  }
+
+  async function saveAndFinish() {
+    try {
+      await fetch('/api/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(choices),
+      });
+    } catch (_) { }
+    buildSummary();
+    showStep(4);
+  }
+
+  function closeOnboarding() {
+    overlay.style.opacity = '0';
+    overlay.style.transition = 'opacity 0.4s ease';
+    setTimeout(() => {
+      overlay.classList.add('ob-hidden');
+      document.body.classList.remove('ob-active');
+    }, 400);
+  }
+
+  const tagInput    = document.getElementById('obTagInput');
+  const checkBtn    = document.getElementById('obCheckTag');
+  const tagResult   = document.getElementById('obTagResult');
+  const next0Btn    = document.getElementById('obNext0');
+
+  function setTagResultError(msg) {
+    tagResult.innerHTML = `<div class="ob-tag-error">⚠️ ${msg}</div>`;
+    tagResult.classList.remove('ob-tag-found');
+  }
+
+  function setTagResultCard(data) {
+    const trophyIcon = 'https://cdn.brawltracker.com/icons/trophy.png';
+    const iconHtml = data.icon
+      ? `<img src="${data.icon}" alt="avatar" onerror="this.style.display='none'">`
+      : '🎮';
+    const trophies = data.total_trophies
+      ? `<span>${data.total_trophies.toLocaleString()}</span><img src="${trophyIcon}" alt="trophies" onerror="this.style.display='none'">`
+      : '';
+    tagResult.innerHTML = `
+      <div class="ob-player-card">
+        <div class="ob-player-avatar">${iconHtml}</div>
+        <div class="ob-player-info">
+          <div class="ob-player-name">${data.name || 'Player'}</div>
+          <div class="ob-player-tag">${data.tag || ''}</div>
+        </div>
+        ${trophies ? `<div class="ob-player-trophies">${trophies}</div>` : ''}
+      </div>`;
+    tagResult.classList.add('ob-tag-found');
+  }
+
+  if (tagInput) {
+    tagInput.addEventListener('input', () => {
+      tagResult.innerHTML = '';
+      tagResult.classList.remove('ob-tag-found');
+      if (next0Btn) next0Btn.disabled = true;
+      choices.player_tag = null;
+    });
+    tagInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') checkBtn?.click();
+    });
+  }
+
+  if (checkBtn) {
+    checkBtn.addEventListener('click', async () => {
+      const raw = (tagInput?.value || '').trim().replace(/^#/, '').toUpperCase();
+      if (!raw) {
+        setTagResultError('Please enter a player tag.');
+        return;
+      }
+      checkBtn.textContent = '…';
+      checkBtn.classList.add('ob-checking');
+      tagResult.innerHTML = '';
+      tagResult.classList.remove('ob-tag-found');
+      if (next0Btn) next0Btn.disabled = true;
+      try {
+        const res = await fetch('/api/onboarding/check-tag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tag: raw }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'Player not found.');
+        setTagResultCard(data);
+        choices.player_tag = raw;
+        if (next0Btn) next0Btn.disabled = false;
+      } catch (err) {
+        setTagResultError(err.message || 'Could not find player. Check the tag and try again.');
+      } finally {
+        checkBtn.textContent = 'Check';
+        checkBtn.classList.remove('ob-checking');
+      }
+    });
+  }
+
+  let providersLoaded = false;
+
+  async function loadOnnxProviders() {
+    const loading = document.getElementById('obOnnxLoading');
+    const ids = { cpu: 'obOnnxCpu', cuda: 'obOnnxCuda', directml: 'obOnnxDirectml' };
+    Object.values(ids).forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.classList.remove('ob-opt-avail', 'ob-selected'); el.classList.add('ob-opt-unavail'); }
+    });
+    if (loading) loading.classList.remove('ob-hidden');
+    try {
+      const res = await fetch('/api/onboarding/providers');
+      const data = await res.json();
+      const available = Array.isArray(data.providers) ? data.providers : ['cpu'];
+      available.forEach(p => {
+        const el = document.getElementById(ids[p]);
+        if (el) { el.classList.remove('ob-opt-unavail'); el.classList.add('ob-opt-avail'); }
+      });
+      providersLoaded = true;
+    } catch (_) {
+      Object.values(ids).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.classList.remove('ob-opt-unavail'); el.classList.add('ob-opt-avail'); }
+      });
+    } finally {
+      if (loading) loading.classList.add('ob-hidden');
+    }
+    makeOptions('onnxOptions', 'cpu_or_gpu');
+  }
+
+  makeOptions('clientOptions',  'brawl_client');
+  makeOptions('emulatorOptions','emulator');
+
+  function goToStep1() {
+    showStep(1);
+    if (!providersLoaded) loadOnnxProviders();
+  }
+
+  document.getElementById('obSkip0')?.addEventListener('click',   () => { choices.player_tag = null; goToStep1(); });
+  document.getElementById('obNext0')?.addEventListener('click',   goToStep1);
+  document.getElementById('obNext1')?.addEventListener('click',   () => showStep(2));
+  document.getElementById('obBack2')?.addEventListener('click',   () => showStep(1));
+  document.getElementById('obNext2')?.addEventListener('click',   () => showStep(3));
+  document.getElementById('obBack3')?.addEventListener('click',   () => showStep(2));
+  document.getElementById('obNext3')?.addEventListener('click',   saveAndFinish);
+  document.getElementById('obContinue')?.addEventListener('click', closeOnboarding);
+
+  async function checkOnboarding() {
+    try {
+      const res = await fetch('/api/onboarding');
+      const data = await res.json();
+      if (data.fsos === 0) {
+        overlay.classList.remove('ob-hidden');
+        overlay.style.opacity = '0';
+        overlay.style.transition = 'opacity 0.4s ease';
+        document.body.classList.add('ob-active');
+        showStep(0);
+        setTimeout(() => { overlay.style.opacity = '1'; }, 30);
+      }
+    } catch (_) { }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', checkOnboarding);
+  } else {
+    checkOnboarding();
+  }
+})();
+
+// ── Online users counter (Firebase Realtime Database) ────────────────────
+(function () {
+  const FIREBASE_URL = 'https://amethyst-a432d-default-rtdb.europe-west1.firebasedatabase.app/online';
+  const TIMEOUT_MS   = 60000; // считаем онлайн тех, кто был активен последние 60 сек
+  const PING_MS      = 30000; // пинг каждые 30 сек
+
+  const countEl = document.getElementById('onlineCount');
+
+  // Переиспользуем ID при F5 — новый только при закрытии вкладки
+  let sessionId = sessionStorage.getItem('amethyst_sid');
+  if (!sessionId) {
+    sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    sessionStorage.setItem('amethyst_sid', sessionId);
+  }
+
+  async function ping() {
+    const now = Date.now();
+    try {
+      // Записываем свой timestamp
+      await fetch(`${FIREBASE_URL}/${sessionId}.json`, {
+        method: 'PUT',
+        body: JSON.stringify(now),
+      });
+
+      // Читаем всех
+      const res  = await fetch(`${FIREBASE_URL}.json`);
+      const data = await res.json();
+
+      if (data && typeof data === 'object') {
+        const cutoff = now - TIMEOUT_MS;
+        const count  = Object.values(data).filter(ts => ts > cutoff).length;
+        if (countEl) countEl.textContent = count;
+      }
+    } catch (_) {
+      if (countEl) countEl.textContent = '—';
+    }
+  }
+
+  // Удаляем себя при закрытии вкладки (best-effort)
+  window.addEventListener('beforeunload', () => {
+    navigator.sendBeacon(`${FIREBASE_URL}/${sessionId}.json`, JSON.stringify(null));
+  });
+
+  ping();
+  setInterval(ping, PING_MS);
+})();

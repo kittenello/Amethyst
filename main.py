@@ -67,11 +67,18 @@ def queue_order_for_log(queue):
 
 
 def _queue_api_url():
-    return os.environ.get("PYLA_QUEUE_API_URL", "http://127.0.0.1:8765/api/queue")
+    url = os.environ.get("PYLA_QUEUE_API_URL", "http://127.0.0.1:8765/api/queue")
+    # Child multi-instance workers set PYLA_QUEUE_API_URL=disabled so they
+    # never accidentally poll the main instance's webapp and steal its queue.
+    if url.strip().lower() in ("disabled", "none", ""):
+        return None
+    return url
 
 
 def fetch_queue_from_webapp(timeout=0.75):
     url = _queue_api_url()
+    if url is None:
+        return None
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -81,6 +88,22 @@ def fetch_queue_from_webapp(timeout=0.75):
 
 def load_startup_queue(data):
     old_order = queue_order_for_log(data)
+
+    # Child workers (PYLA_QUEUE_API_URL=disabled) must only use their own
+    # isolated latest_brawler_data.json. Skip the webapp fetch entirely.
+    if _queue_api_url() is None:
+        queue_path = Path("latest_brawler_data.json")
+        if queue_path.exists():
+            try:
+                saved = json.loads(queue_path.read_text(encoding="utf-8"))
+                if isinstance(saved, list) and saved:
+                    new_order = queue_order_for_log(saved)
+                    if new_order and new_order != old_order:
+                        print(f"[WORKER] Startup queue loaded from latest_brawler_data.json: {new_order[:8]}")
+                    return saved
+            except Exception as e:
+                print(f"[WORKER] Could not read latest_brawler_data.json at startup: {e}")
+        return data
 
     try:
         webapp_queue = fetch_queue_from_webapp(timeout=0.75)

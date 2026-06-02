@@ -494,6 +494,7 @@ class Play(Movement):
             classes=self.tile_detector_model_classes
         )
 
+
         self.time_since_movement = time.time()
         self.time_since_gadget_checked = time.time()
         self.time_since_hypercharge_checked = time.time()

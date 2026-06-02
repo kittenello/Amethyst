@@ -86,16 +86,6 @@ class TrophyObserver:
                 return gain*self.trophies_multiplier + self.win_streak_gain()
 
     def calc_showdown_delta(self, place_index):
-        """Return trophy delta for showdown trio based on finishing place.
-
-        place_index is 0-based: 0 = 1st, 1 = 2nd, 2 = 3rd, 3 = 4th.
-
-        NOTE: trophies_multiplier is intentionally NOT applied here.
-        Showdown deltas are fixed by the official Brawl Stars trophy table
-        and do not scale with any multiplier event/setting.
-        Applying the multiplier here caused a desync between the bot's
-        internal trophy count and the actual in-game trophies.
-        """
         for max_trophies, deltas in self.showdown_trio_ranges:
             if float(self.current_trophies) <= float(max_trophies):
                 return deltas[place_index]
@@ -158,14 +148,6 @@ class TrophyObserver:
         )
 
     def _update_milestones(self, brawler, old, new):
-        """Track every MILESTONE_STEP-trophy boundary the brawler crosses.
-
-        Each milestone is summarized exactly once per session — the first
-        time it's reached. After that the anchor is frozen at (milestone,
-        crossing_time) and never rewinds on dips below it. The next summary
-        (for the next milestone) is therefore measured from that original
-        crossing, regardless of intermediate drops.
-        """
         now = time.monotonic()
         step = MILESTONE_STEP
 
@@ -175,9 +157,6 @@ class TrophyObserver:
 
         anchor_trophies = self._milestone_anchor_trophies[brawler]
 
-        # Upward: emit a summary for every milestone strictly above the anchor
-        # that `new` has reached. The first one uses the actual anchor value
-        # (e.g. 777 -> 800); subsequent ones use the previous milestone.
         next_milestone = ((anchor_trophies // step) + 1) * step
         while new >= next_milestone:
             elapsed = now - self._milestone_anchor_time[brawler]

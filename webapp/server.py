@@ -222,7 +222,49 @@ def fetch_brawltracker_player(player_tag, timeout=15):
     if not brawlers:
         raise RuntimeError("Brawltracker HTML loaded, but no brawler cards were parsed. Check logs/debug_brawltracker.html")
 
-    return {"name": player_name or "Player", "tag": f"#{tag}", "brawlers": brawlers, "source": "brawltracker"}
+    # Player icon — brawltracker renders it as alt="Player Icon"
+    player_icon = ""
+    icon_match = re.search(
+        r'<img[^>]+alt=["\']Player Icon["\'][^>]+srcset=["\']([^"\']+)["\']',
+        html, re.I | re.S
+    )
+    if icon_match:
+        # srcset may have "url 1x, url 2x" — take the last (2x) entry
+        srcset_raw = icon_match.group(1)
+        parts = [p.strip().split()[0] for p in srcset_raw.split(",") if p.strip()]
+        player_icon = parts[-1] if parts else ""
+    if not player_icon:
+        # fallback: src attribute
+        icon_src_match = re.search(
+            r'<img[^>]+alt=["\']Player Icon["\'][^>]+src=["\']([^"\']+)["\']',
+            html, re.I | re.S
+        )
+        if icon_src_match:
+            player_icon = icon_src_match.group(1)
+    # Resolve relative URLs returned by brawltracker's Next.js image proxy
+    if player_icon and player_icon.startswith("/"):
+        player_icon = "https://brawltracker.com" + player_icon
+
+    # Total trophies — brawltracker shows it near the profile header
+    total_trophies = 0
+    # Pattern: alt="Trophy" followed by a number inside a span/div
+    trophy_total_match = re.search(
+        r'alt=["\']Trophy["\'][^>]*>.*?<(?:span|div|p)[^>]*>\s*([\d,]+)\s*</',
+        html, re.I | re.S
+    )
+    if trophy_total_match:
+        total_trophies = int(trophy_total_match.group(1).replace(",", ""))
+    if not total_trophies:
+        total_trophies = sum(b.get("trophies", 0) for b in brawlers)
+
+    return {
+        "name": player_name or "Player",
+        "tag": f"#{tag}",
+        "brawlers": brawlers,
+        "source": "brawltracker",
+        "icon": player_icon,
+        "total_trophies": total_trophies,
+    }
 
 
 
@@ -291,6 +333,9 @@ class MultiInstanceManager:
         self.logs_dir = self.root / "logs"
         self.logs_dir.mkdir(exist_ok=True)
         self.lock = threading.RLock()
+        # FIX: per-instance locks so two parallel Start requests never race
+        # on the same runtime folder (shutil.rmtree + shutil.copytree on cfg).
+        self._instance_locks = {i: threading.Lock() for i in range(1, 5)}
         self.instances = {}
         self.max_instances = 4
         self.default_ports = [5555, 5557, 5559, 5561]
@@ -478,8 +523,14 @@ class MultiInstanceManager:
         queue = payload.get("queue")
         if not isinstance(queue, list) or not queue:
             queue = []
-        # Optional per-instance override from UI can be added later; default: use current queue.
         if not queue:
+            # FIX: prefer a per-instance queue file (latest_brawler_data_2.json etc.)
+            # so different instances can have fully independent queues set from the UI.
+            per_instance_file = self.root / f"latest_brawler_data_{instance_id}.json"
+            if instance_id > 1 and per_instance_file.exists():
+                queue = WebApp._read_json(per_instance_file, [])
+        if not isinstance(queue, list) or not queue:
+            # Fallback: use the global queue (instance 1 / main).
             queue = WebApp._read_json(self.root / "latest_brawler_data.json", [])
         if not isinstance(queue, list) or not queue:
             raise ValueError("Queue is empty. Add at least one brawler before starting an instance.")
@@ -499,10 +550,13 @@ class MultiInstanceManager:
             self._prebuild_all_runtimes()
             cfg_source = self._cfg_source(instance_id)
             runtime_dir = self._runtime_dir(instance_id)
-            # Fast path after first prebuild: only refresh selected cfg and port.
-            self._copy_project_runtime(runtime_dir, cfg_source)
-            self._patch_instance_config(runtime_dir, port)
-            (runtime_dir / "latest_brawler_data.json").write_text(json.dumps(queue, indent=2), encoding="utf-8")
+            # FIX: hold per-instance lock while doing file ops so two concurrent
+            # Start requests for the same instance cannot race on cfg/ copy.
+            with self._instance_locks.get(instance_id, threading.Lock()):
+                # Fast path after first prebuild: only refresh selected cfg and port.
+                self._copy_project_runtime(runtime_dir, cfg_source)
+                self._patch_instance_config(runtime_dir, port)
+                (runtime_dir / "latest_brawler_data.json").write_text(json.dumps(queue, indent=2), encoding="utf-8")
 
             # Important: old web stop flags/control files are stored inside the reused runtime.
             # If they are not cleared, the next launch can immediately stop and look like
@@ -523,6 +577,11 @@ class MultiInstanceManager:
             env["PYLA_MULTI_INSTANCE_SERIAL"] = f"127.0.0.1:{port}"
             env["PYLA_MULTI_INSTANCE_NAME"] = self._emulator_name(port)
             env["PYLA_MULTI_INSTANCE_CFG"] = cfg_source.name
+            # FIX: Child workers have no webapp of their own.
+            # Disable webapp queue polling so they always use their own
+            # isolated latest_brawler_data.json instead of stealing the
+            # queue from the main instance's webapp (port 8765).
+            env["PYLA_QUEUE_API_URL"] = "disabled"
             cmd = [sys.executable, "multi_worker.py"]
             process = subprocess.Popen(
                 cmd, cwd=str(runtime_dir), stdout=log_file, stderr=subprocess.STDOUT,
@@ -538,6 +597,7 @@ class MultiInstanceManager:
                 "startedAt": time.time(),
                 "runtimeDir": str(runtime_dir),
                 "logPath": str(log_path),
+                "logFile": log_file,  # FIX: kept so stop_instance can close it
                 "queue": queue,
                 "state": "running",
             }
@@ -584,6 +644,13 @@ class MultiInstanceManager:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+            # FIX: close the log file handle to prevent fd leak on repeated start/stop
+            log_file = inst.get("logFile")
+            if log_file is not None:
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
             inst["state"] = "stopped"
             public = self._public_instance(instance_id)
             # Remove stopped cards from the active hub; logs stay on disk and can still be read.
@@ -670,6 +737,8 @@ class WebApp:
         self.thread = None
         self.selected_data = None
         self.multi = MultiInstanceManager(ROOT)
+        self._online_clients: dict = {}   # ip -> last_seen timestamp
+        self._online_lock = threading.Lock()
 
     def start(self):
         app = self
@@ -696,6 +765,30 @@ class WebApp:
                 except OSError:
                     continue
         raise OSError("Could not find a free local port for the web UI.")
+
+    # ── Online users tracker ──────────────────────────────────────────────────
+    ONLINE_TIMEOUT = 60  # seconds; client pings every 30s
+
+    def ping_online(self, client_ip: str) -> dict:
+        """Record a heartbeat from client_ip and return current online count."""
+        now = time.time()
+        with self._online_lock:
+            self._online_clients[client_ip] = now
+            # Evict stale entries
+            cutoff = now - self.ONLINE_TIMEOUT
+            self._online_clients = {ip: ts for ip, ts in self._online_clients.items() if ts > cutoff}
+            count = len(self._online_clients)
+        return {"online": count}
+
+    def get_online(self) -> dict:
+        """Return current online count without updating the caller's timestamp."""
+        now = time.time()
+        cutoff = now - self.ONLINE_TIMEOUT
+        with self._online_lock:
+            count = sum(1 for ts in self._online_clients.values() if ts > cutoff)
+        return {"online": count}
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def build_state(self):
         bot_config = load_toml_as_dict(str(ROOT / "cfg" / "bot_config.toml"))
@@ -942,7 +1035,14 @@ class WebApp:
         save_brawler_data([])
         return {"queue": []}
 
-    def get_queue(self):
+    def get_queue(self, instance_id=None):
+        # FIX: if instance_id provided and > 1, check for per-instance queue file first.
+        if instance_id and int(instance_id) > 1:
+            per_file = ROOT / f"latest_brawler_data_{int(instance_id)}.json"
+            if per_file.exists():
+                queue = self._read_json(per_file, [])
+                if isinstance(queue, list) and queue:
+                    return {"queue": queue}
         queue = self._read_json(ROOT / "latest_brawler_data.json", [])
         return {"queue": queue if isinstance(queue, list) else []}
 
@@ -1070,6 +1170,92 @@ class WebApp:
             except Exception:
                 pass
         return {"ok": True, "settings": self.build_state()["settings"]}
+
+    def get_onnx_providers(self):
+        """Run onnxruntime provider check and return available options."""
+        available = []
+        try:
+            import onnxruntime as ort
+            providers = ort.get_available_providers()
+            # CPU is always available
+            available.append("cpu")
+            if "CUDAExecutionProvider" in providers:
+                available.append("cuda")
+            if "DmlExecutionProvider" in providers:
+                available.append("directml")
+        except Exception:
+            # onnxruntime not installed yet — fall back to running the script
+            try:
+                import subprocess, sys
+                script = str(ROOT / "tools" / "directmltest.py")
+                result = subprocess.run(
+                    [sys.executable, script],
+                    capture_output=True, text=True, timeout=15
+                )
+                out = result.stdout
+                available.append("cpu")
+                if "CUDAExecutionProvider" in out:
+                    available.append("cuda")
+                if "DmlExecutionProvider" in out:
+                    available.append("directml")
+            except Exception:
+                available = ["cpu"]
+        return {"ok": True, "providers": available}
+
+    def check_player_tag_onboarding(self, payload):
+        """Fetch player info by tag for the onboarding step (lightweight — no brawler sync)."""
+        tag = str(payload.get("tag", "")).strip()
+        if not tag:
+            raise ValueError("Player tag is required.")
+        player = fetch_brawltracker_player(tag, timeout=15)
+        return {
+            "ok": True,
+            "name": player.get("name", ""),
+            "tag": player.get("tag", ""),
+            "icon": player.get("icon", ""),
+            "total_trophies": player.get("total_trophies", 0),
+        }
+
+    def get_onboarding_status(self):
+        """Return fsos value from general_config (0 = first run, 1 = completed)."""
+        config = load_toml_as_dict(str(ROOT / "cfg" / "general_config.toml"))
+        fsos = int(config.get("fsos", 0))
+        return {"fsos": fsos}
+
+    def complete_onboarding(self, payload):
+        """Save onboarding choices and set fsos=1."""
+        config_path = str(ROOT / "cfg" / "general_config.toml")
+        config = dict(load_toml_as_dict(config_path))
+
+        cpu_or_gpu = str(payload.get("cpu_or_gpu", "cpu")).strip().lower()
+        if cpu_or_gpu not in ("cpu", "cuda", "directml"):
+            cpu_or_gpu = "cpu"
+        config["cpu_or_gpu"] = cpu_or_gpu
+
+        client = str(payload.get("brawl_client", "BSD")).strip()
+        package_map = {
+            "BSD": "bsd.suitcase.release",
+            "BSD+": "bsd.suitcase.plus",
+            "Original": "com.supercell.brawlstars",
+        }
+        config["brawl_stars_package"] = package_map.get(client, "bsd.suitcase.release")
+
+        emulator = str(payload.get("emulator", "LDPlayer")).strip()
+        if emulator in ("LDPlayer", "MuMu"):
+            config["current_emulator"] = emulator
+
+        config["fsos"] = 1
+        save_dict_as_toml(config, config_path)
+
+        # Save player tag if provided
+        player_tag = str(payload.get("player_tag", "")).strip()
+        if player_tag:
+            api_path = str(ROOT / "cfg" / "brawl_stars_api.toml")
+            api_config = dict(load_toml_as_dict(api_path))
+            api_config["player_tag"] = player_tag.lstrip("#")
+            save_dict_as_toml(api_config, api_path)
+
+        return {"ok": True}
 
     def update_player_tag(self, payload):
         path = str(ROOT / "cfg" / "brawl_stars_api.toml")
@@ -1264,6 +1450,10 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/onboarding":
+            return self.send_json(self.web_app.get_onboarding_status())
+        if parsed.path == "/api/onboarding/providers":
+            return self.send_json(self.web_app.get_onnx_providers())
         if parsed.path == "/api/state":
             return self.send_json(self.web_app.build_state())
         if parsed.path == "/api/player":
@@ -1276,7 +1466,11 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
             self.web_app.ready.set()
             return self.send_json({"ok": True})
         if parsed.path == "/api/queue":
-            return self.send_json(self.web_app.get_queue())
+            query = parse_qs(parsed.query)
+            instance_id = query.get("instance_id", [None])[0]
+            return self.send_json(self.web_app.get_queue(instance_id=instance_id))
+        if parsed.path == "/api/online":
+            return self.send_json(self.web_app.get_online())
         if parsed.path == "/api/multi/state":
             return self.send_json(self.web_app.multi.public_state())
         if parsed.path == "/api/multi/scan":
@@ -1290,6 +1484,13 @@ class WebRequestHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         payload = self.read_json_body()
         try:
+            if parsed.path == "/api/online/ping":
+                client_ip = self.client_address[0]
+                return self.send_json(self.web_app.ping_online(client_ip))
+            if parsed.path == "/api/onboarding":
+                return self.send_json(self.web_app.complete_onboarding(payload))
+            if parsed.path == "/api/onboarding/check-tag":
+                return self.send_json(self.web_app.check_player_tag_onboarding(payload))
             if parsed.path == "/api/queue":
                 return self.send_json({"queue": self.web_app.save_queue_entry(payload)})
             if parsed.path == "/api/queuecreate":

@@ -17,6 +17,11 @@
       <button class="nav" data-view="logging"><span>@</span><b data-i18n="logging">Logging</b></button>
       <button class="nav" data-view="settings"><span>:</span><b data-i18n="settings">Settings</b></button>
     </nav>
+    <div style="flex:1"></div>
+    <div class="online-badge" id="onlineBadge" title="Users online right now">
+      <span class="online-dot"></span>
+      <span id="onlineCount">—</span> online
+    </div>
   </aside>
 
   <main class="app">
@@ -170,6 +175,121 @@
 
       <p id="sdStatus" class="tiny-status"></p>
       <button class="primary" onclick="saveStarrDropSettings()">Save settings</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       ONBOARDING OVERLAY  (shown only when fsos = 0)
+       ══════════════════════════════════════════════════════════════ -->
+  <div id="onboardingOverlay" class="ob-overlay ob-hidden">
+    <!-- blurred backdrop of the real UI is achieved by CSS on body -->
+    <div class="ob-card" id="obCard">
+
+      <!-- STEP 0 – Player TAG -->
+      <div class="ob-step" id="obStep0">
+        <h2 class="ob-title">Your Player Tag</h2>
+        <p class="ob-subtitle">Step 0 of 3 — Account Setup</p>
+        <p class="ob-desc">Enter your Brawl Stars player tag so the bot can track your trophies. This step is optional.</p>
+        <div class="ob-tag-row">
+          <span class="ob-tag-hash">#</span>
+          <input id="obTagInput" class="ob-tag-input" type="text" placeholder="ABC123XYZ" autocomplete="off" spellcheck="false">
+          <button class="ob-btn-check" id="obCheckTag">Check</button>
+        </div>
+        <div class="ob-tag-result" id="obTagResult"></div>
+        <div class="ob-nav">
+          <button class="ob-btn-skip" id="obSkip0">Skip</button>
+          <button class="ob-btn-next" id="obNext0" disabled>Next →</button>
+        </div>
+      </div>
+
+      <!-- STEP 1 – ONNX type -->
+      <div class="ob-step ob-step-hidden" id="obStep1">
+        <h2 class="ob-title">Quick Setup</h2>
+        <p class="ob-subtitle">Step 1 of 3 — ONNX Runtime</p>
+        <p class="ob-desc">Which ONNX Runtime will you be using?</p>
+        <div class="ob-options" id="onnxOptions">
+          <button class="ob-opt ob-opt-unavail" data-value="cpu" id="obOnnxCpu">
+            <span class="ob-opt-label">CPU</span>
+          </button>
+          <button class="ob-opt ob-opt-unavail" data-value="cuda" id="obOnnxCuda">
+            <span class="ob-opt-label">CUDA</span>
+          </button>
+          <button class="ob-opt ob-opt-unavail" data-value="directml" id="obOnnxDirectml">
+            <span class="ob-opt-label">DirectML</span>
+          </button>
+        </div>
+        <div id="obOnnxLoading" class="ob-loading-row">
+          <span class="ob-spinner"></span> Detecting available providers…
+        </div>
+        <div class="ob-nav">
+          <span></span>
+          <button class="ob-btn-next" id="obNext1" disabled>Next →</button>
+        </div>
+      </div>
+
+      <!-- STEP 2 – Brawl Stars client -->
+      <div class="ob-step ob-step-hidden" id="obStep2">
+        <h2 class="ob-title">Brawl Stars Client</h2>
+        <p class="ob-subtitle">Step 2 of 3 — Game Version</p>
+        <p class="ob-desc">Which Brawl Stars client are you using?</p>
+        <div class="ob-options" id="clientOptions">
+          <button class="ob-opt" data-value="BSD">
+            <span class="ob-opt-label">BSD</span>
+          </button>
+          <button class="ob-opt" data-value="BSD+">
+            <span class="ob-opt-label">BSD+</span>
+          </button>
+          <button class="ob-opt" data-value="Original">
+            <span class="ob-opt-label">Original</span>
+          </button>
+        </div>
+        <div class="ob-nav">
+          <button class="ob-btn-back" id="obBack2">← Back</button>
+          <button class="ob-btn-next" id="obNext2" disabled>Next →</button>
+        </div>
+      </div>
+
+      <!-- STEP 3 – Emulator -->
+      <div class="ob-step ob-step-hidden" id="obStep3">
+        <h2 class="ob-title">Emulator</h2>
+        <p class="ob-subtitle">Step 3 of 3 — Choose Emulator</p>
+        <p class="ob-desc">Which Android emulator are you using?</p>
+        <div class="ob-options" id="emulatorOptions">
+          <button class="ob-opt" data-value="LDPlayer">
+            <span class="ob-opt-label">LDPlayer</span>
+          </button>
+          <button class="ob-opt" data-value="MuMu">
+            <span class="ob-opt-label">MuMu Player</span>
+          </button>
+          <div class="ob-opt ob-opt-disabled" data-value="BlueStacks">
+            <span class="ob-opt-label">BlueStacks</span>
+            <div class="ob-tooltip">BlueStacks is not supported at this time</div>
+          </div>
+        </div>
+        <div class="ob-nav">
+          <button class="ob-btn-back" id="obBack3">← Back</button>
+          <button class="ob-btn-next" id="obNext3" disabled>Save →</button>
+        </div>
+      </div>
+
+      <!-- STEP 4 – Congrats -->
+      <div class="ob-step ob-step-hidden" id="obStep4">
+        <h2 class="ob-title">You're all set!</h2>
+        <p class="ob-desc">Setup complete! For any questions or support, feel free to reach out on Discord.</p>
+        <div class="ob-summary" id="obSummary"></div>
+        <div class="ob-nav ob-nav-center">
+          <a class="ob-btn-discord" href="https://discord.gg/PjTKTp9tqh" target="_blank">Discord</a>
+          <button class="ob-btn-continue" id="obContinue">Continue</button>
+        </div>
+      </div>
+
+      <!-- progress dots -->
+      <div class="ob-dots">
+        <span class="ob-dot ob-dot-active" id="obDot0"></span>
+        <span class="ob-dot" id="obDot1"></span>
+        <span class="ob-dot" id="obDot2"></span>
+        <span class="ob-dot" id="obDot3"></span>
+      </div>
     </div>
   </div>
 
